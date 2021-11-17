@@ -20,3 +20,5 @@ Together our data provide a genome-scale resource of gene functional profiles in
 Should you encounter any issues or have any questions please contact Florian Heigwer <f.heigwer@dkfz.de> or Michael Boutros <m.boutros@dkfz.de>.
 
 Raw sequencing read data are deposit at ArrayExpress under the Study ID: TBA
+
+Raw & processeed scRNA-seq matrices as well as Raw & processed well-average interaction feature matrices are availanble at : 10.6084/m9.figshare.14192783
