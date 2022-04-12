@@ -1,0 +1,271 @@
+---
+title: "GIs_group_cell_count"
+author: "Sergi Beneyto Calabuig"
+date: "2/24/2020"
+output: html_document
+abstract: I applied the classification pipeline to the complete syngene dataset. This resulted in the classification of almost 23 billion cells into the 9 predifined groups. In this project I will compute the genetic interactions using the cell count feature. I will treat each of the 9 groups independently which means that a particular gene will have a different main effect depending on the group. Once the p_values are computed, I will adjust them using the Benjamini-Hochberg procedure. In order to correct for the high number of tests, I will adjust the p_values of all groups together. With this I hope to eliminate the possible false positives which can arise from increasing the number of tests by 9-fold. While the pipeline was commputing, the number of cells for each group in each well was calculated. In order to normalise these values and make the resulting pi scores comparable ot the other features, I glog transform them (lamda = 1) and robust Z-score transform them following the same procedure as in the rest of the features. This means that I computed the median and median absolute deviation of each group in the control plate for every screen and use them as a center and scale. It is worth noting that by doing that only batch effects are corrected, but no correction for potential plate effects is carried out. 
+editor_options: 
+  chunk_output_type: console
+---
+
+#Package loading
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(cluster)
+library(factoextra)
+library(randomForest)
+library(plotly)
+library(Rtsne)
+library(jsonlite)
+library(kernlab)
+library(plyr)
+library(LMGene)
+library(gridExtra)
+library(ggpubr)
+library(uwot)
+library(patchwork)
+library(data.table)
+library(dtplyr)
+library(limma)
+library(matrixStats)
+
+```
+
+#Object loading
+
+I normalised the raw cell count values in the server sc2cn01 ("/home/s458g/ms_thesis/4.1_group_GIs_analysis/4.1.2_scale_factors_ncells"). The column norm_cells corresponds to Z-scores of the cell count computed as described in the abstract. 
+
+```{r}
+
+#Not all the wells are analysed in the bulk. Control plates are for instance excluded, as well as the control wells in every plate. 
+
+bulk_data <- readRDS("objects/interactions_stats_all_feats_df_18112019.rds") %>% filter(feature == "cells")
+
+#Annotation query genes.
+
+query_genes <- readRDS("objects/query_genes.rds") %>% separate(plate_barcode, into = c("barcode", "screen"), sep = "_")
+
+#Annotation target genes.
+
+target_genes_new<-readRDS("objects/updated_target_genes.rds")
+
+#Single cell data for cell count
+
+sc_data <- readRDS("objects/aggregated_norm_cell_count.rds")
+
+#For screens S063 and S064 I accidentally wrote the well names only with two characters. Therefore I will have to fix it, so that the notation is the same for all.
+
+s63_s64 <- lazy_dt(sc_data) %>% filter(screen %in% c("S063", "S064")) %>% pull(well)
+
+updated_wells <- vector()
+
+count <- 0
+
+pb <- txtProgressBar(min = 0, max = length(s63_s64), style = 3)
+
+for(well in s63_s64){
+  
+  if(nchar(well) == 2){
+    
+    updated_wells <- c(updated_wells, paste0(str_split(well, "")[[1]][1], "0", paste0(str_split(well, "")[[1]][2])))
+    
+  }else{updated_wells <- c(updated_wells, well)}
+  
+  count <- count + 1
+  
+  setTxtProgressBar(pb, count)
+}
+
+s63_s64 <- lazy_dt(sc_data) %>% filter(screen %in% c("S063", "S064")) %>% mutate(well = updated_wells) %>% as_tibble()
+
+sc_data <- lazy_dt(sc_data) %>% filter(screen != "S063" & screen != "S064") %>% as_tibble() %>% rbind(s63_s64)
+
+
+sc_data <- sc_data %>% separate(plate, into = c("replicate", "plate"), sep = 2)
+
+#Add query and target gene names
+
+sc_data <- lazy_dt(sc_data) %>% left_join(query_genes %>% select(screen, query_name)) %>% 
+              left_join(target_genes_new %>% select(replicate, plate, well, gene_symbol)) %>% select(screen, replicate, plate, well, everything()) %>% 
+              as_tibble()
+
+#Interaction calling function
+
+load("objects/call_interactions_function.RData")
+
+#Eliminate duplicates
+
+#Unfortunately plates 2000s of S061 were duplicated while applying the classification pipeline. I need to eliminate the duplicates before computing GIs. 
+
+s061 <- lazy_dt(sc_data) %>% filter(screen == "S061") %>% distinct() %>% as_tibble()
+
+sc_data <- lazy_dt(sc_data) %>% filter(screen != "S061") %>% as_tibble() %>% rbind(s061)
+
+
+```
+
+#GI calculation
+
+Here I will compute the genetic interactions for the cell count. Control plates and wells in which a control target gene is present will be excluded from the analysis. The function call interactions computes the query and target main effects as well as the pi scores. 
+
+##GI calling
+
+First I will compute the pi scores and the query and main effects for every group. 
+
+```{r}
+
+#There are some query genes which have a replicate whose quality was not really good and therefore were excluded form the bulk data analysis. I will also 
+#exclude them. 
+
+bad_queries <- c(bulk_data %>% pull(query_name) %>% unique(), as.character(sc_data %>% pull(query_name) %>% unique())) %>% as_tibble() %>% 
+                  group_by(value) %>% tally() %>% filter(n == 1) %>% pull(value)
+
+
+
+#Eliminate control plates and wells which contain a control target. Also eliminate queries with low quality. 
+
+sc_data_GIs <- lazy_dt(sc_data) %>% filter(gene_symbol != "control", plate != "R1" | plate != "R2",
+                                           query_name %in% bad_queries == F) %>% 
+                  as_tibble() %>% arrange(screen, replicate, plate, well)
+
+
+list_GIs_raw <- list()
+
+for(ctxt in c("Isolated", "Crowded")){
+  for(grp in unique(sc_data$group)){
+    
+    if((ctxt == "Crowded" & grp == "Elongated") == F){
+      
+      data <- lazy_dt(sc_data_GIs) %>% filter(context == ctxt, group == grp) %>% select(-context, -group,-n_cells) %>% as_tibble() %>% 
+                unite("query", screen, query_name ,sep = "_") %>% unite("target", replicate, plate, well, gene_symbol, sep = "_") %>% 
+                pivot_wider(names_from = query, values_from = norm_cells) %>% column_to_rownames(var = "target")
+    
+      list_GIs_raw[[ctxt]][[grp]] <- call_interactions(data)
+      
+    }
+  }
+}
+
+```
+
+##Statistics
+
+###Raw p_values
+
+After computing the GIs a p_value for every combination of query and target genes can be computed. This will be different for every group. 
+
+```{r}
+
+#It can happen that for a specific condition we don't have a pi score or only one is present. This is because no cells from this group were found on 
+#some or all the replicates of the condition. Only conditions which have at least two pi scores can be used to compute the p_value.
+#This function allows to eliminate all rows which have more than a specified number of NAs, in our case 3 or more. 
+
+delete.na <- function(DF, n=0) {
+  DF[rowSums(is.na(DF)) <= n,]
+}
+
+count <- 0
+
+pb <- txtProgressBar(min = 0, max = 9, style = 3)
+
+list_GIs_p_values <- list()
+
+for(ctxt in c("Isolated", "Crowded")){
+  for(grp in unique(sc_data$group)){
+    
+    if((ctxt == "Crowded" & grp == "Elongated") == F){
+      
+      #The mean target main effects are stored in the results table. 
+      
+      target_main <- list_GIs_raw[[ctxt]][[grp]]$targetMainEffect %>% as.data.frame() %>% rownames_to_column(var = "target") %>% 
+                        dplyr::rename(target_main = ".") %>% separate(target, into = c("rep", "plate", "well", "target_name"), sep = "_") %>% 
+                        select(-rep) %>% group_by(plate, well)  %>% dplyr::summarise(target_main = median(target_main, na.rm = T))
+      
+      #The mean query main effects will be stored in the results table. 
+      
+      query_main <- list_GIs_raw[[ctxt]][[grp]]$queryMainEffect %>% as_tibble() %>% mutate(query = colnames(list_GIs_raw[[ctxt]][[grp]]$pi)) %>% 
+                      dplyr::rename(query_main = V1) %>% separate(query, into = c("screen", "query_name"), sep = "_") %>% group_by(query_name) %>%
+                      select(-screen) %>% dplyr::summarise(query_main = median(query_main, na.rm = T))
+      
+      #Get pi scores. 
+      
+      
+      data <- list_GIs_raw[[ctxt]][[grp]]$pi %>% rownames_to_column(var = "target") %>% as_tibble() %>% 
+                pivot_longer(names_to = "query", values_to = "pi", cols = -c(target)) %>% 
+                separate(target, into = c("rep", "plate", "well", "target_name"), sep = "_") %>% 
+                separate(query, into = c("screen", "query_name"), sep = "_") 
+      
+      
+      #Spread the pi scores by condition so that p_values can be computed. 
+      
+      
+      data <- lazy_dt(data) %>% group_by(query_name, plate, well) %>% 
+                mutate(replicate = seq(from = 1, to = n(), by = 1)) %>% ungroup() %>% select(-rep, -screen) %>% as_tibble() %>% 
+                unite("condition", query_name, plate, well, target_name, sep = "_")  %>% 
+                pivot_wider(names_from = replicate, values_from = pi) %>% column_to_rownames(var = "condition")
+      
+      #Delete conditions which have one or no pi scores. 
+      
+      data <- delete.na(data, 2)
+      
+      #Calculate raw p_values. 
+      
+      p_values <- eBayes(lmFit(data))$p.value %>% as.data.frame() %>% rownames_to_column(var = "condition") %>% dplyr::rename(p_value = x1)
+      
+      #Add p_values to the table and compute median pi scores. 
+      
+      data <- data %>% rownames_to_column(var = "condition") %>% left_join(p_values) %>% 
+                separate(condition, into = c("query_name", "plate", "well", "target_name"), sep = "_") %>% 
+                left_join(query_main) %>% left_join(target_main) %>% mutate(context = rep(ctxt), group = rep(grp)) %>% 
+                select(plate, well, query_name, query_main, target_main, target_name, context, group, everything()) %>% 
+                mutate(mpi = rowMeans(data[,c(1,2,3,4)], na.rm = TRUE)) 
+      
+      #Save the data by group in a list.
+      
+      list_GIs_p_values[[ctxt]][[grp]] <- data
+      
+      count <- count+1
+      
+      setTxtProgressBar(pb, count)
+                
+      
+    }
+  }
+}
+
+```
+
+###Adjusted p_values
+
+Generally raw p_values are corrected for multiple comparisons using the Benjamini-Hochberg method. As a result, the adjusted p_values can be called False Discovery Rate (FDR) because the value indicates the estimated proportion of false positives which are as or more extreme than the observed fdr value. 
+In order to correct by the increased number of tests that are done by increasing the number of tests by 9-fold, I will adjust p_values from all groups together using the Benjamini-Hochberg procedure. 
+
+```{r}
+
+#Merge the results data from all the groups. 
+
+list_merg <- list()
+
+list_merg[["Crowded"]] <- do.call("rbind", list_GIs_p_values[["Crowded"]])
+
+list_merg[["Isolated"]] <- do.call("rbind", list_GIs_p_values[["Isolated"]])
+
+results_data <- do.call("rbind", list_merg)
+
+rm(list_merg)
+
+results_data <- results_data %>% mutate(fdr = p.adjust(p_value, method = "BH"))
+
+saveRDS(results_data, file = paste0(dirname(getwd()), "/results/grp_interactions_norm_cells_130320.rds"))
+
+
+```
+

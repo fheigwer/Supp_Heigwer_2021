@@ -1,0 +1,343 @@
+---
+title: "model_testing"
+author: "Sergi"
+date: "12/16/2019"
+output: pdf_document
+abstract: In the previous markdown I have developed a random forest which classifies crowded cells into 4 groups: Big, Condensed, Irregular nucleus and Normal. Here I will apply the model to a subsample of the syngene screen to analyse the group distributions. Then I will also carry out cross-comparisons between isolated group classifiers of the time-resolved screen and the syngene screen. 
+editor_options: 
+  chunk_output_type: console
+---
+#Package loading
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(randomForest)
+library(EBImage)
+library(e1071)
+library(plotly)
+library(Rtsne)
+library(jsonlite)
+library(RSQLite)
+library(LMGene)
+library(gridExtra)
+library(ggpubr)
+library(uwot)
+library(pryr)
+library(data.table)
+library(dtplyr)
+library(patchwork)
+library(ggrepel)
+
+density_classifier <- readRDS("model_testing/density_classifier.rds")
+
+filtering_classifier <- readRDS("model_testing/filtering_classifier.rds")
+
+```
+#Subsample
+I retrieved a subsample of cells from the syngene screen comprising around 2 million single cells. There is one plate from screens S001 to S175. From each plate 6 wells were selected and 2000 cells sampled from each. The subsample was processed following the same steps as the training set.
+##Classification
+```{r}
+
+#I have to rule out cells which are at the edges of the image.
+
+subsample_syngene <- read_csv("model_testing/subsample_processed_features.csv", col_names = T, col_types = cols(plate = col_character())) %>% 
+                            filter(DNA.m.cx > 100 & DNA.m.cx < 1948 & DNA.m.cy > 100 & DNA.m.cy < 1948) 
+
+
+subsample_syngene_crow <- subsample_syngene %>% filter(predict(filtering_classifier, subsample_syngene) == "Yes", 
+                                                      predict(density_classifier, subsample_syngene) == "Crowded")
+
+subsample_syngene_crow["group"] <- predict(rf_optimized, subsample_syngene_crow)
+
+#Global numbers by group
+
+count(subsample_syngene_crow, "group") %>% as_tibble() %>% mutate(proportion = freq/nrow(subsample_syngene_crow))
+
+#As expected the majority of the cells are classified as normal (52 % of the total). There proportion of condensed cells is very high, almost 30 %. 
+
+
+```
+###Stacked barplot
+I will make a stacked barplot with the proportions of the different groups. 
+```{r}
+
+syngene_stack_data <- count(subsample_syngene_crow, "group") %>% mutate(proportions = freq/nrow(subsample_syngene_crow)) %>% 
+                        mutate(group = factor(group, levels = c("Big","Irregular_nucleus", "Condensed", "Normal")), type = rep("Average"))
+
+load("~/Desktop/Sergi_master_thesis/themes/bar_plot_theme.RData")
+
+stacked_crow_plot <- ggplot(syngene_stack_data, aes(x = type, y = proportions, fill = group, label = round(proportions, 2)))+
+                              geom_bar(position="stack", stat = "identity")+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19),
+                                    axis.ticks.x = element_blank(),
+                                    axis.text.x = element_blank(),
+                                    legend.position = "right")+
+                              #guides(fill = guide_legend(nrow = 2, override.aes = list(size = 3), title.position = "top", title.hjust = 0.5))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1.01))+
+                              scale_fill_manual(values = c(google_green, google_red, lacoste_green, google_blue),
+                                                labels = c("Big","Irregular nucleus", "Condensed", "Normal"))+
+                              labs(fill = "Group")+
+                              ylab("Proportion of cells")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+
+ggsave(stacked_crow_plot, filename = "model_testing/plots/stacked_group_prop.pdf", height = 8, width = 6)
+
+
+
+```
+###UMAP subsample
+It will be interesting to see how the cell distribute in a UMAP plot. Since the subsample has almost half a million of isolted cells I will randomly subsample around 20,000 and coloured them based on the group. 
+```{r}
+
+#UMAP global
+
+syngene_subsample_20k <- subsample_syngene_crow %>% sample_n(20000)
+
+syngene_subsample_umap <- syngene_subsample_20k %>% select(imp_feat_initial_rf) %>% uwot::umap(n_neighbors = 30) %>% as_tibble() %>% 
+                            dplyr::rename(dimension1 = V1, dimension2 = V2) %>% mutate(group = syngene_subsample_20k %>% pull(group))
+
+umap_subset_plot <-  ggplot(syngene_subsample_umap, aes(x=dimension1, y= dimension2, color = factor(group)))+
+                            geom_point(size = 0.75)+
+                            umap_theme()+
+                            theme(
+                            legend.title = element_text(size = 16))+
+                            scale_color_manual(values = colours, labels = c("Big", "Condensed", "Irregular nucleus", "Normal"))+
+                            guides(colour = guide_legend(nrow = 2, byrow = T, override.aes = list(size = 6)))+
+                            xlab("UMAP dimension 1")+
+                            ylab("UMAP dimension 2")+
+                            labs(color = "Group")
+
+ggsave(umap_subset_plot, height = 8, width = 8.5, filename = "model_testing/plots/umap_20k_subsample.png", device = "png")
+
+#the group distribution in the global cloud is as expected. However there are a few groups of outliers very far apart from the main group. cells in this groups belong to different classes.
+
+############################################################################################################################################################
+
+#Outliers
+
+#There seem to be two groups of outliers. One of them is mainly composed of cells from S156 and S057. Both screens have good quality control comments. 
+
+count(syngene_subsample_20k[which(syngene_subsample_umap$dimension2 < -5),], c("screen", "plate", "well"))
+
+#the other group of outliers come from 5 different screens. 
+
+count(syngene_subsample_20k[which(syngene_subsample_umap$dimension1 > 10),], c("screen", "plate", "well"))
+
+#What is interesting is that the classifier seems insensitive to the isolated position in the map, because there is not a predominant group. 
+
+count(syngene_subsample_20k[which(syngene_subsample_umap$dimension1 > 10),], "group")
+
+count(syngene_subsample_20k[which(syngene_subsample_umap$dimension2 < -5),], "group")
+
+###########################################################################################################################################################
+
+#t-SNE
+
+#I will use t-SNE as the dimensionality reduction algorithm to see if the overall cell distribution changes. 
+
+t_sne_syngene <- syngene_subsample_20k %>% select(imp_feat_initial_rf) %>% Rtsne(dims = 2, verbose = T, check_duplicates = F, perplexity = 60) %>% .$Y %>%
+                    as.data.frame() %>% dplyr::rename(dimension1 = V1, dimension2 = V2) %>%  mutate(group = syngene_subsample_20k %>% pull(group))
+
+tsne_syngene_plot <- ggplot(t_sne_syngene, aes(x=dimension1, y= dimension2, color = factor(group)))+
+                            geom_point(size = 0.75)+
+                            umap_theme()+
+                            theme(
+                            legend.title = element_text(size = 16))+
+                            scale_color_manual(values = colours, labels = c("Big", "Condensed", "Irregular nucleus", "Normal"))+
+                            guides(colour = guide_legend(nrow = 2, byrow = T, override.aes = list(size = 6)))+
+                            xlab("t-SNE dimension 1")+
+                            ylab("t-SNE dimension 2")+
+                            labs(color = "Group")
+
+#With t-SNE the outliers are no longer present. Or at least there are not so separated from the big cloud of cells. 
+
+ggsave(tsne_syngene_plot, height = 8, width = 8.5, filename = "model_testing/plots/tsne_20k_subsample.png", device = "png")
+
+###################################################################################################################################################
+
+#t-SNE arranged
+
+#To better visualise the distribution of the groups, I will make individual UMAP plots of every class and then arranged them together in an image. 
+
+list_tnse_crow <- list()
+
+list_tnse_crow[["together"]] <- tsne_syngene_plot + guides(colour = guide_legend(nrow = 1, override.aes = list(size = 6)))
+
+for(state in sort(unique(t_sne_syngene$group))){
+  
+  list_tnse_crow[[state]] <- ggplot(t_sne_syngene %>% filter(group == state), aes(x=dimension1, y= dimension2, color = group))+
+                            geom_point(data = t_sne_syngene %>% filter(group != state), alpha = 0.3, colour = "grey", size = 0.25)+
+                            geom_point(size = 0.25)+
+                            umap_theme()+
+                            theme(
+                            legend.title = element_text(size = 16))+
+                            scale_color_manual(values = colours[which(sort(unique(t_sne_syngene$group)) == state)],
+                                               labels = c("Big", "Condensed", "Irregular nucleus", "Normal"))+
+                            guides(colour = guide_legend(override.aes = list(size = 6)))+
+                            xlab("t-SNE dimension 1")+
+                            ylab("t-SNE dimension 2")+
+                            labs(color = "Group")
+                            
+  
+}
+
+tsne_arrg_crow <- ggarrange(plotlist = list_tnse_crow, nrow = 2, ncol = 3, common.legend = T, legend = "bottom")
+
+ggsave(tsne_arrg_crow, filename = "model_testing/plots/tsne_crow_alone_arrang.png", height = 9, width = 14, device = "png")
+
+#The visualisation is nicer when each group is coloured and the rest of points are grayed in the background. 
+```
+##Proportions by well
+I would like to show the group proportions in the different wells. I will show this in a scatter plot. It will give me an idea of how group proportions might vary in the different conditions. 
+```{r}
+
+#Data aggregation
+
+#I will only plot wells which have more than 200 cells sampled. 
+
+dot_plot_data <- subsample_syngene_crow %>% select(screen, plate, well, group) %>% 
+                  group_by(screen, plate, well, group) %>% 
+                  tally() %>% mutate(total_cells = sum(n), prop_cells = n/sum(n)) %>% 
+                  filter(total_cells>200) %>% ungroup() 
+
+#I need to remove the 0 of wells 1 to 9 of each row. 
+
+well_name <- dot_plot_data %>% pull(well)
+
+for (well in 1:length(well_name)){
+  
+  if(str_split(well_name[well], "")[[1]][2] == "0"){
+    
+    well_name[well] <- paste0(str_split(well_name[well], "")[[1]][1], str_split(well_name[well], "")[[1]][3])
+    
+  }
+  
+}
+
+#Assign gene names. 
+
+dot_plot_data <- dot_plot_data %>% left_join(query_genes %>% separate(plate_barcode, into = c("barcode", "screen")) %>% select(screen, query_name)) %>% 
+                    mutate(well = well_name) %>% 
+                    left_join(target_genes %>% select(plate, well, gene_symbol), by = c("plate", "well")) %>% 
+                    dplyr::rename(target = gene_symbol) %>% 
+                    unite(gene_pair, query_name, target,sep = "_")
+                      
+
+#Dot plot
+
+#Since I will use geom_jitter to plot the points I need to save and fix the position of them so that I can add later on the label on the point exactly. 
+
+pos <- position_jitter(seed = 1)
+
+load("~/Desktop/Sergi_master_thesis/themes/bar_plot_theme.RData")
+
+dot_plot_syngene <- ggplot(dot_plot_data, aes(x = group, y = prop_cells, colour = group, label = gene_pair))+
+                      geom_point(position = pos)+
+                      stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.25, colour = "black")+
+                      bar_plot_theme()+
+                      ylab("Proportion of cells")+
+                      scale_color_manual(values = c(colours), labels = c("Big", "Condensed", "Irregular nucleus", "Normal"))+
+                      theme(plot.title = element_text(size = 26, hjust = 0.5),
+                            axis.text.x = element_blank())+
+                      guides(colour = guide_legend(nrow = 1, override.aes = list(size = 6)))+
+                      ggtitle("Syngene screen")+
+                      labs(colour = "Group")+
+                      scale_y_continuous(limits = c(0, 0.9))
+                      #geom_label(data = dot_plot_prop %>% filter(context == "Crowded", proportion >0.85), position = pos, size = 3)+
+                      #geom_label_repel(data = dot_plot_data %>% filter(group == "Elongated", prop_cells > 0.2), position = pos, size = 3)
+
+#If I look at the extremes the model seems to be doing well. Conditions in which Rheb is kd give rise to higher proportion of condensed cells, while Rho1 results in high number of big cells. 
+#Surprisingly many conditions in which the proportion of elongated cells was very high, have a raw knockdown. 
+
+ggsave(dot_plot_syngene, filename = "model_testing/plots/dot_plot_well_syngene.pdf", height = 8, width = 10)
+
+```
+#Time-resolved subsample
+I want to compare the density classifiers of the present screen and the time-resolved experiment. Here I will use the density algorithm developed for the time-resolved screen pipeline. I will applied to a subsample of the data which includes cells from all screens. More specifically, 6 random plates and 20 random wells were selected from which 1000 cells were copied by condition. This gives rise to data from two replicates of 420 different conditions. 
+##Classification
+```{r}
+
+filtering_classifier_time <- readRDS("model_testing/filtering_classifier_time_screen.rds")
+
+density_classifier_time <- readRDS("model_testing/final_rf_density_classifier_time.rds")
+
+crowded_classifier_time <- readRDS("model_testing/crowded_classifier_time.rds")
+
+
+#Ruling out wrongly segmented cells and filtering for isolated cells. 
+
+subsample_time_screen <- readRDS("model_testing/subsample_time_screen.rds")
+
+subsample_time_screen <- subsample_time_screen %>% filter(predict(filtering_classifier_time, subsample_time_screen) == "Yes",
+                                                          predict(density_classifier_time, subsample_time_screen) == "Crowded")
+
+#Classify cells into groups. 
+
+subsample_time_screen <- subsample_time_screen %>% mutate(group = predict(crowded_classifier_time, subsample_time_screen))
+
+#There are almost as many crowded cells as isolated cells. 
+
+count(subsample_time_screen, "group")
+
+```
+##Proportions by well
+I will compute group proportions by well to see the distribution under different conditions. 
+```{r}
+#Gene annotation time-resolved screen
+
+load("~/Desktop/Sergi_master_thesis/gene_annotation/gene_annotation_time_resolved_data.RData")
+
+query_mappin <- query_mappin %>% dplyr::rename(plate = V2, query = V3)
+
+target_mappin <- target_mappin %>% dplyr::rename(well = V2, target = V3)
+
+time_points <- tibble(screen = unique(subsample_time_screen$screen), time = c("3 days", "4 days", "5 days", "3 days", "4 days", "5 days"))
+
+#Data aggregation and gene names addition. 
+
+dot_plot_data_time <- subsample_time_screen %>% select(screen, plate, well, group) %>% 
+                        group_by(screen, plate, well, group) %>% 
+                        tally() %>% mutate(total_cells = sum(n), prop_cells = n/sum(n)) %>% 
+                        filter(total_cells>200) %>% ungroup() %>% 
+                        left_join(query_mappin %>% select(-V1)) %>% 
+                        left_join(target_mappin %>% select(-V1)) %>% 
+                        left_join(time_points)
+
+
+#I would like to colour the dots by the time point, therefore I added a column with the time point at which cells were fixes and imaged. 
+
+#Dot plot
+
+netflix_red <- "#E50914"
+
+ikea_blue <- "#0051BA"
+  
+ikea_yellow <- "#FFDA1A"
+
+
+dot_plot_time <- ggplot(dot_plot_data_time, aes(x = group, y = prop_cells, colour = group))+
+                      geom_point(position = pos)+
+                      stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.25, colour = "black")+
+                      bar_plot_theme()+
+                      ylab("Proportion of cells")+
+                      scale_color_manual(values = c(google_green, lacoste_green, google_yellow, google_red, google_blue))+
+                      theme(legend.title = element_blank(),
+                            plot.title = element_text(size = 26, hjust = 0.5),
+                            axis.text.x = element_blank())+
+                      guides(colour = guide_legend(nrow = 1, override.aes = list(size = 6)))+
+                      ggtitle("Time-resolved screen")+
+                      scale_y_continuous(limits = c(0, 0.9))
+                      #geom_label(data = dot_plot_prop %>% filter(context == "Crowded", proportion >0.85), position = pos, size = 3)+
+                      #geom_label_repel(data = dot_plot_prop %>% filter(context == "Isolated", proportion ==1), position = pos, size = 3)
+
+
+
+ggsave(dot_plot_time, filename = "model_testing/plots/dot_plot_well_time.pdf", height = 8, width = 10)
+
+```

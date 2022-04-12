@@ -1,0 +1,125 @@
+---
+title: "0-preprocessing-featureselection"
+author: "Florian Heigwer"
+date: "12/07/2021"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggpubr)
+library(patchwork)
+library(ggrepel)
+library(GGally)
+library(MASS)
+library(ggridges)
+library(cowplot)
+library("dendextend")
+library(dtplyr)
+library(corrr)
+library(RColorBrewer)
+library(ggrastr)
+theme_set(theme_cowplot())
+```
+
+# use the filtered data data frame to assess feature reporducibility and redundancy
+
+```{r, eval=FALSE}
+
+f<-function(x){
+    y <- x %>% spread(screen,value) 
+    return(cor(y[,4:5],use = "p",method = "p")[2])
+}
+
+ l=list()
+ 
+ for(i in list.files("../../SYNGENE_interactions/raw_data/",pattern = "^filtered_data*")){
+    print(i)
+    load(paste0("../../SYNGENE_interactions/raw_data/",i))
+    l[[i]]<- filtered_data%>% 
+            dplyr::select(gene_id,design,value,query_name,screen) %>%
+            group_by(query_name) %>% 
+            do(c= f(.)) %>% 
+            unnest()
+ }
+ 
+filtered_data_cor_many_feats<-bind_rows(l,.id="feature") %>% mutate(feature=gsub(feature,pattern = "filtered_data_(.*).RData",replacement = "\\1"))
+  
+saveRDS(filtered_data_cor_many_feats,file = "../../SYNGENE_interactions/raw_data/cor_many_feats_18112019.rds")
+
+```
+
+#get the reproducible feature
+
+Filter only for those features who median pearson correlation coefficient if higher the 0.4 over 98 duplicated screens
+
+```{r}
+if(!exists("filtered_data_cor_many_feats")){
+  filtered_data_cor_many_feats<-readRDS("../../SYNGENE_interactions/raw_data/cor_many_feats_18112019.rds")
+}
+
+reproducible_feature<-filtered_data_cor_many_feats %>%
+    group_by(feature) %>%
+    summarise(c=median(c,na.rm = T)) %>%
+    filter(c>0.4) %>%
+    pull(feature) %>%
+    unique() 
+
+saveRDS(reproducible_feature,"processed_data/reproducible_feature_18112019.rds")
+```
+
+
+#create dataframe of all normalized data for reproducible feature
+
+we do this in order to use carets findCorrelation function to filter out redundant features
+
+```{r, eval=FALSE}
+l=list()
+
+for(i in list.files("../../SYNGENE_interactions/raw_data/",pattern = "^filtered_data*")){
+ 
+  if(gsub(i,pattern = "filtered_data_(.*).RData",replacement = "\\1") %in% reproducible_feature){
+    print(i)
+    load(paste0("../../SYNGENE_interactions/raw_data/",i))
+    l[[i]]=filtered_data
+  }
+  
+}
+
+filtered_data_many_feats<-bind_rows(l,.id="feature") %>% mutate(feature=gsub(feature,pattern = "filtered_data_(.*).RData",replacement = "\\1"))
+saveRDS(filtered_data_many_feats,file = "../../SYNGENE_interactions/raw_data/collected_filtered_data_many_feats_18112019.rds")
+
+```
+
+
+#Find the non redundant features
+
+We use the reporducible features to start with and their values over all screens averaged to find co-variate features and exclude them
+
+```{r}
+if(!exists("filtered_data_many_feats")){
+  filtered_data_many_feats <- readRDS("../../SYNGENE_interactions/raw_data/collected_filtered_data_many_feats_18112019.rds")
+}
+
+filtered_data_many_feats_dt <- filtered_data_many_feats %>% group_by(targetid,query_name,feature) %>% summarise(value=mean(value,na.rm=TRUE)) %>% spread(feature,value) 
+
+saveRDS(filtered_data_many_feats_dt,"../../SYNGENE_interactions/raw_data/collected_filtered_data_many_feats_dt_18112019.rds")
+
+if(!exists("filtered_data_many_feats_dt")){
+  filtered_data_many_feats_dt <- readRDS("../../SYNGENE_interactions/raw_data/collected_filtered_data_many_feats_dt_18112019.rds")
+}
+
+cor_matrix<-filtered_data_many_feats_dt %>% .[,reproducible_feature_sorted] %>% correlate(method="p",use="p")
+
+corm<-cor_matrix %>% select_if(is.numeric)
+rownames(corm) <- cor_matrix$rowname
+corm<-as.matrix(corm)
+
+redundant_features<-caret::findCorrelation(corm,cutoff = 0.7)
+
+usable_features<-c("cells",reproducible_feature[-redundant_features])
+
+saveRDS(usable_features,"processed_data/usable_features_18112019.rds")
+```

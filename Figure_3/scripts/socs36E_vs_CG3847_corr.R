@@ -1,0 +1,1 @@
+main_effect_df_181119 %>% filter(gene_symbol %in% c("CG3847","Socs36E"))  %>% select(-targetid) %>% spread(gene_symbol,value) %>% ggplot(aes(x=CG3847,y=Socs36E)) + geom_point() + geom_smooth(method="lm") + theme_classic()

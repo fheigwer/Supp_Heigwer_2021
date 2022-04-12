@@ -1,0 +1,361 @@
+---
+title: "Syngene short QC report S060"
+output: pdf_document
+---
+
+```{r ,echo=FALSE,error=FALSE,warning=FALSE,include=FALSE}
+
+#define_analysis_parameters
+set="S060"
+feat="cells"
+
+```
+
+```{r setup,echo=FALSE,error=FALSE,warning=FALSE,include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(RPostgreSQL)
+library(FitAR)
+test_db <- src_postgres(dbname = "incell2000_test",
+                        host = "b110-sc2sn01",
+                        user = "florianH",
+                        password = "x!Kl9R_p7XZYjLhg")
+
+#helper function for Z-Prime-factor
+z.prime <- function(pos,neg){
+  z=1-(
+      (3*sd(pos,na.rm=T)+3*sd(neg,na.rm=T))/abs(mean(pos,na.rm=T)-mean(neg,na.rm=T))
+    )
+  return(tbl_df(z) %>% rename(zprimefactor=value))
+}
+#helper function for Z-factor
+z.fact <- function(pos,neg){
+  z=1-(
+      (3*sd(pos,na.rm=T)+3*sd(neg,na.rm=T))/abs(mean(pos,na.rm=T)-mean(neg,na.rm=T))
+    )
+  return(tbl_df(z) %>% rename(zfactor=value))
+}
+#normalization function that normalizes each plate to its median except the control plates who get normalized by the average of all sample plates
+norm_to_median<-function(x){
+  screenval <- x %>% ungroup() %>% select(screen) %>% distinct() %>% unlist(use.names = F)
+  featureval <- x %>% ungroup() %>% select(feature) %>% distinct() %>% unlist(use.names = F)
+  val <- ref_vals %>% filter(screen==screenval,feature==featureval) %>% select(m) %>% unlist(use.names = F)
+  if(filter(x,kind=="sample") %>% n_distinct() > 1){
+    return(x %>% mutate(value=value/median(value[content=="sample"],na.rm=T)))
+  }else{
+    return(x %>% mutate(value=value/val))
+  }
+}
+#z-transform each data point by the median of the negative controls of the control plates and the mad of the rluc controls of each sample plate
+norm_to_ctrlplates<-function(x){
+  m <- 
+    x %>% 
+      filter(kind=="ctrl",content=="rluc") %>% 
+      summarise(m=median(value,na.rm=T))
+  s <- 
+    x %>% 
+    filter(kind=="sample",content=="rluc") %>% 
+    summarise(s=mad(value,na.rm=T))
+  
+  x %>% mutate(value=(value-m$m)/s$s)
+}
+#helper function to find design correlations
+f<-function(x){
+  tbl_df(cor(x$`1`,x$`2`,use = "p",method = "spearman"))
+}
+#helper function to count all plates in the screening set, which could no be well replicated
+collect_stats<-function(x){
+  if(nrow(x %>% filter(correlates=="bad"))<1){
+    x %>% mutate(count=NA)
+  }else{
+    x %>% filter(correlates=="bad") %>% mutate(count=n())
+  }
+}
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+
+
+#read in annotation
+#synanno <- read_delim("final_machine_readable_annoation.txt",delim = "\t",col_types = cols(.default = col_character()))
+aggregated_data_db <- tbl(test_db,"D1086_trimmed_mean")
+syngene_annotation_db <- tbl(test_db,"D1086_annotation") %>% collect()
+
+syndata <- 
+  aggregated_data_db %>% 
+  select(   -barcode      ,-ends_with(".sd")) %>%
+  filter(  screen==set    ) %>%
+  collect(n=Inf) %>%
+  mutate(well=gsub(well,pattern="_",replacement = "" ,perl = T)) %>% 
+  mutate(plate=gsub(plate,pattern="Crtl",replacement = "CTRL" ,perl = T)) %>% 
+  group_by(screen,plate,well,field) %>%
+  summarise_all(mean) %>% 
+  ungroup() %>%
+  left_join(syngene_annotation_db) %>%
+  gather(feature,value,-well,-plate,-screen,-field,-content,-id,-fbgn,-gene_symbol,-hd3plate,-hd3well,-hd3content,-hd3query_id,-hd3fbgn,-hd3gene) %>%
+  ungroup()
+  
+ref_vals <- 
+  syndata %>%  
+  mutate(kind=if_else(grepl("CTRL",plate),"ctrl","sample"),
+         value=glog(value,a = quantile(value,0.03,na.rm=T))) %>%
+  filter(kind=="sample") %>%
+  group_by(screen,feature) %>%
+  summarise(m=median(value[content=="sample"],na.rm=T)) %>%
+  ungroup() 
+
+syndata %<>%
+  mutate(kind=if_else(grepl("CTRL",plate),"ctrl","sample"),
+         rawvalue=value,
+         value=glog(value,a = quantile(value,0.03,na.rm=T))
+         ) %>%
+  group_by(screen,plate,feature) %>%
+  do(norm_to_median(.)) %>%
+  group_by(feature,screen) %>%
+  do(norm_to_ctrlplates(.)) %>%
+  mutate(design=ifelse(grepl("^20",plate),2,1)) %>% 
+  extract(plate,"tmp","(\\d{2}$)",remove = F) %>% 
+  mutate(targetid=paste(tmp,well,sep = "_")) %>% 
+  group_by(screen,plate,well,feature) %>% 
+  mutate(value=mean(value,na.rm=T),rawvalue=mean(rawvalue,na.rm=T)) %>%
+  select(-field) %>% 
+  ungroup() %>% 
+  distinct()
+```
+
+## Z' factor analysis for each plate
+
+Using the Z-factor analysis we can assess if our assay has worked for the feature we chose. There we ask how well our controls are separated from each other. A factor between 0.5 and 1 here denotes an excellent separation of controls and that the assay works great. Values between 0.5 and 0 denote an okish assay. Everything else marks the plate as failing in this analysis. However we are very stringend here and call any plate with an Z-factor (between neutral and postivie controls) or Z-prime factor (between negative and positive controls) lower than 0.5 failed.
+
+```{r ,error=F,warning=F,echo=FALSE}
+
+# let's plot the Z' factor between gap1 and thread (one should promote growth, the other should decrease it)
+passedZprime <- syndata %>% 
+  filter(feature=="cells") %>%
+  group_by(screen,feature,plate) %>%
+  do(z.prime(pos=.$value[.$content=="gap1"],neg=.$value[.$content=="thread"])) %>%
+  mutate(passedQC=if_else(zprimefactor>=0.5,"passed","failed")) %>%
+  filter(passedQC=="passed") %>%
+  ungroup() %>%
+  summarise(count=n())
+
+# to be more stringend we can also plot the Z factor between rluc and thread (one should do nothing, the other should kill all cells)
+passedZfac <- syndata %>% 
+  filter(feature=="cells") %>%
+  group_by(screen,feature,plate) %>%
+  do(z.fact(pos=.$value[.$content=="rluc"],neg=.$value[.$content=="thread"])) %>%
+  mutate(passedQC=if_else(zfactor>=0.5,"passed","failed")) %>%
+  filter(passedQC=="passed") %>%
+  ungroup() %>%
+  summarise(count=n())
+
+```
+
+## Assay controls
+
+Analysis reveals that:
+
+```{r ,error=F,warning=F,echo=FALSE}
+cat(passedZprime$count)
+```
+
+of 38 paltes passed the Z' factor treshold of 0.5.
+
+and that
+
+```{r ,error=F,warning=F,echo=FALSE}
+cat(passedZfac$count)
+```
+
+of 38 paltes passed the Z factor treshold of 0.5.
+
+## Design correlation
+
+Now that we know how normalization worked and how the variance spreads along the plates we can have a glimpse on the design reproducability between the first and second designs targeting all genes in the library.
+
+```{r, error=FALSE, warning=FALSE,echo=FALSE,include=FALSE}
+
+woqueryeffect <- syndata %>% group_by(feature) %>% mutate(value=(value-median(value,na.rm=T))/mad(value,na.rm=T)) %>% ungroup()
+
+designcorr <- 
+  woqueryeffect %>% 
+  ungroup() %>% 
+  filter(content=="sample",kind=="sample") %>% 
+  mutate(design=ifelse(grepl("HD31",id),1,2)) %>% 
+  extract(id,"hdid",regex = "(\\d{5})$") %>%
+  select(hdid,design, feature, value) %>%
+  spread(design,value) %>% 
+  complete(hdid,feature) %>% 
+  group_by(hdid) %>%
+  do(f(.)) %>% 
+  ungroup()
+
+samplids=designcorr %>% sample_n(6840) %>% select(hdid) %>% unlist(use.names = F)
+rand=rbind.data.frame(cbind(samplids,rep(1,times=length(samplids))),cbind(samplids,rep(2,times=length(samplids))))
+rand=rand[sample(nrow(rand)),]
+names(rand)=c("nums","designs")
+
+randcorr <- 
+  woqueryeffect %>% 
+  ungroup() %>% 
+  filter(content=="sample",kind=="sample") %>% 
+  mutate(design=ifelse(grepl("HD31",id),1,2)) %>% 
+  extract(id,"hdid",regex = "(\\d{5})$") %>%
+  select(hdid,design, feature, value) %>%
+  group_by(feature) %>% 
+  mutate(hdid=as.character(rand$nums),design=rand$designs) %>% 
+  spread(design,value) %>%  
+  group_by(hdid) %>% 
+  do(f(.)) %>%
+  ungroup() %>% 
+  select(hdid,randvalue=value)
+
+designcorr %<>% ungroup() %>% left_join(randcorr ) %>% gather(type,val,-hdid) 
+
+d1 <- designcorr %>% filter(type=="value",is.finite(val)) %>% select(val) %>% unlist(use.names = F) %>% median()
+d2 <- designcorr %>% filter(type=="randvalue",is.finite(val)) %>% select(val) %>% unlist(use.names = F) %>% median()
+
+# look for points of intersection
+
+```
+
+We find a random correlation median of:
+
+```{r , error=FALSE, warning=FALSE,echo=FALSE}
+cat(d2)
+```
+
+And a sample correlations median of:
+
+```{r , error=FALSE, warning=FALSE,echo=FALSE}
+cat(d1)
+if(d1-d2<0.3){
+  cat("Warning: design correlations are close to random correlations.")
+}else{
+  cat("Messager: design correlations are good.")
+}
+poi=0.3
+```
+
+```{r , error=FALSE, warning=FALSE,echo=FALSE,include=FALSE}
+forscatter <- 
+  syndata %>% 
+  ungroup() %>% 
+  filter(content=="sample",kind=="sample") %>% 
+  mutate(design=ifelse(grepl("HD31",id),1,2)) %>% 
+  extract(id,"hdid",regex = "(\\d{5})$") %>% 
+  select(hdid,targetid,design, feature, rawvalue) %>% 
+  spread(feature,rawvalue) %>% 
+  select_("targetid","hdid","design",feat) %>% 
+  spread_("design",feat) %>% 
+  left_join(designcorr %>% filter(type=="value")) %>%
+  select(-type) %>%
+  mutate(correlates=ifelse(val<poi,"bad","good")) %>% 
+  separate(targetid,c("plate","well")) %>%
+  extract(well,c("row","col"),regex = "([A-Z])(\\d+)") %>%
+  mutate(col=as.numeric(col)) %>%
+  complete(plate,row,col) %>%
+  arrange(plate,row,col) %>%
+  mutate(row=factor(row,levels = rev(unique(row))),col=factor(col,ordered = T))
+
+badlycorrelating<-forscatter %>% filter(correlates=="bad") %>% ungroup() %>% summarise(n=n()) %>% unlist(use.names = F)
+
+```
+
+There we find that 
+
+```{r ,error=F,warning=F,echo=FALSE}
+cat(badlycorrelating)
+```
+
+wells do correlate worse than r = 0.3 .
+
+These wells map the following way across the paltes of the screen:
+
+```{r ,error=F,warning=F,echo=FALSE}
+
+forscatter  %>%
+  ggplot(aes(col, 
+             row,
+             fill=correlates
+  )
+  ) + 
+  geom_tile() + 
+  facet_wrap("plate") +
+  theme(
+        axis.text.x = element_text(angle = 90, hjust = 1, size=5,color="black"),
+        axis.text.y = element_text(hjust = 1, size=5,color="black"),
+        plot.title = element_text(lineheight=1, color="black", size=2)
+        ) + 
+  xlab('') +
+  ylab('')
+
+```
+
+In general the cell seeding and anlysis can be controled on the mean of the two internal replicates:
+
+```{r ,error=F,warning=F,echo=FALSE}
+
+forscatter %>% 
+  mutate(val=(`1`+`2`)/2) %>%
+  ggplot(aes(col, 
+             row,
+             fill=val
+  )
+  ) + 
+  geom_tile() + 
+  #scale_fill_gradientn(colours = cm.colors(10, alpha = 1)) +
+  facet_wrap("plate") +
+  theme(
+        axis.text.x = element_text(angle = 90, hjust = 1, size=5,color="black"),
+        axis.text.y = element_text(hjust = 1, size=5,color="black"),
+        plot.title = element_text(lineheight=1, color="black", size=2)
+        ) + 
+  xlab('') +
+  ylab('')
+
+```

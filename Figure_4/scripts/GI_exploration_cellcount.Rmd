@@ -1,0 +1,332 @@
+---
+title: "GIs_exploration"
+author: "Sergi Beneyto Calabuig"
+date: "2/25/2020"
+output: html_document
+abstract: In the markdown GIs_group_cell_count, I computed the genetic interaction scores by group. I used the normalised cell count values (glog transformed with lambda 1 and Z-score transformed using the median cell count of the group for every screen). To compute GIs, I used the commonly used procedure in the lab of applying a median polish to estimate the query and target main effects as well as the pi scores. I carried out this analysis for every group independently. The I computed the p_values by applying the moderated t_test of the limma package. Finally, to correct for the higher number of statistical tests compared to the bulk analysis I adjusted the p_values of all groups together using the Benjamini-Hochberg procedure. In the final results table, I included the plate, well, query and target names, query and target main effects, the context, the group, the 4 pi scores corresponding to every replicate, the raw p_value, the median pi score and the adjusted p_value which is also called False Discovery Rate (fdr).
+editor_options: 
+  chunk_output_type: console
+---
+#Package loading
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(cluster)
+library(factoextra)
+library(randomForest)
+library(plotly)
+library(Rtsne)
+library(jsonlite)
+library(kernlab)
+library(pryr)
+library(LMGene)
+library(gridExtra)
+library(ggpubr)
+library(uwot)
+library(patchwork)
+library(data.table)
+library(dtplyr)
+library(limma)
+library(ggradar)
+library(ggiraphExtra)
+library(ggiraph)
+library(UpSetR)
+```
+
+#Object loading
+
+Here I will load the table with pi scores from the bulk analysis, as well as the table with the measured aggregated feature values from the bulk. 
+
+```{r}
+
+results_data <- readRDS("objects/grp_interactions_norm_cells_130320.rds")
+
+bulk_data <- readRDS("objects/interactions_stats_all_feats_df_18112019.rds") %>% filter(feature == "cells")
+
+load("objects/bulk_normalized_cell_count.RData")
+
+load("objects/colour_codes.RData")
+
+load("objects/bar_plot_theme.RData")
+
+```
+
+#Data exploration
+
+##Specificity of interactions
+
+To grasp how many interactions affect multiple phenotypes, it might be interesting to plot how many interactions are shared between one group, how many between two, three, four and how many are invariant for a specific context. Later on, I can zoom in to see which groups share more interactions with one another using the package upsetR. As a threshold for significant interactions I will use a FDR of 0.1. 
+
+I will subdivided interactions by the type (positive or negative) and also by the context. This means I will analyse GIs for the isolated and crowded cells independently. As an example if a positive interaction takes place in only one group of isolated cells and also one group of crowded cells it will count as two unique interactions. Furthermore, if a positive interaction takes place in one group and the same interaction but negative also only occurs in one group, they will be again considered as unique interactions because they have a different direction. 
+
+I will define three subtypes of interactions:
+
+Invariant: Interaction present in all the groups of a context. 
+
+Shared: Interaction happening in 50 % or more of the groups but not in all of them for a context. This means interactions shared by 3 and 4 groups for isolated cells and interactions shared by two or three groups in crowded cells. 
+
+Group-specific: Interaction which is observed in less than 50 % of the groups of a specific context. Interactions detected in one of two groups for isolated cells  and interactions present only in one group for crowded cells. 
+
+###GIs in the groups
+
+It will be interesting to see the proportion of interactions shared by the different groups for crowded and isolated cells. 
+
+```{r}
+
+#Let's see first how many significant GIs are there in our analysis compared to the bulk. 
+
+results_data %>% filter(fdr < 0.1) %>% nrow()
+
+#There are 90586 significant GIs. 
+
+bulk_data %>% filter(fdr < 0.1) %>% nrow()
+
+#In the bulk there are only 8317 significant GIs. It was expected to find many more significant GIs in our analysis simply because we have more groups for the same conditions. There are a bit more than 10 times more interactions in the single cell analysis compared to the bulk. 
+
+#load("~/Desktop/Sergi_master_thesis/themes/bar_plot_theme.RData")
+
+
+gis_shared <- results_data %>% filter(fdr < 0.1) %>%  
+                  mutate(type_gi = if_else(mpi < 0, "Negative", "Positive")) %>% 
+                  group_by(query_name, plate, well, context, type_gi) %>% 
+                  dplyr::summarise(ngis = n()) %>%
+                      ungroup() %>% 
+                  mutate(type = case_when(ngis == 1 ~ "Unique",
+                                           ngis == 2 ~ "2 groups",
+                                           ngis  == 3 ~ "3 groups",
+                                           context == "Crowded" & ngis  == 4 ~ "Invariant",
+                                           context == "Isolated" & ngis  == 4 ~ "4 groups",
+                                           context == "Isolated" & ngis  == 5 ~ "Invariant")) %>%
+                  ungroup() %>% 
+                  group_by(type, context) %>% tally() %>% ungroup() %>% group_by(context) %>% 
+                  mutate(prop = n/sum(n)) %>% ungroup() %>% 
+                  mutate(subtype = case_when(type == "Unique" ~ "Group-specific",
+                                              type == "2 groups" & context == "Isolated" ~
+                                               "Group-specific",
+                                              type == "2 groups" & context == "Crowded" ~ "Shared",
+                                              type %in% c("3 groups", "4 groups") ~ "Shared",
+                                              type  == "Invariant" ~ "Invariant")) 
+
+
+bar_plot_spec_gis <- print(ggplot(gis_shared %>% 
+                                    mutate(context = factor(context, 
+                                                            levels = c("Isolated","Crowded")),
+                                           type = factor(type, levels = c("Unique", "2 groups", 
+                                                                          "3 groups", 
+                                                                          "4 groups","Invariant")),
+                                           subtype = factor(subtype, levels = c("Group-specific",
+                                                                                "Shared",
+                                                                                "Invariant"))), 
+                                   aes(x = type, y = n, fill = subtype, label = prop))+
+                             geom_bar(position = "stack", stat = "identity")+
+                             bar_plot_theme()+
+                             ylab("Number of significant GIs")+
+                             scale_y_continuous(expand = c(0, 0,0.01,0))+
+                             theme(strip.text.x = element_text(size = 20),
+                                   legend.position = "bottom",
+                                   legend.title = element_blank(), 
+                                   axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))+
+                             scale_fill_manual(values = c(ikea_blue, dark_red, apple_grey))+
+                             geom_text(aes(label = paste0(round(prop,2))), size = 6, 
+                                       position = position_stack(vjust = 0.5), colour = "white")+
+                             facet_grid(~context, scales = "free_x", space = "free"))
+                 
+
+ggsave(bar_plot_spec_gis, filename = "graphics/summary_spec_GIs.pdf", height = 8, width = 9)
+
+#Around 50 % of the interactions are unique in both contexts. More than 70 % of the interactions take place in one or two groups for a specific context. 
+
+
+
+```
+
+####Absolute numbers
+
+In order to compare the absolute number of interactions of every defined type depending on the context, I will make a stacked barplot with absolute numbers
+
+```{r}
+
+bar_plot_spec_gis_num <- print(ggplot(gis_shared %>% 
+                                        mutate(context = factor(context, levels = c("Isolated", "Crowded")),
+                                               subtype = factor(subtype, levels = c("Invariant", "Shared",
+                                                                                    "Group-specific"))) %>% 
+                                      group_by(context, subtype) %>% summarise(n = sum(n)) %>% ungroup() %>%
+                                        group_by(context) %>% mutate(prop = n/sum(n)), 
+                                   aes(x = context, y = n, fill = subtype, label = prop))+
+                                 geom_bar(position = "stack", stat = "identity")+
+                                 bar_plot_theme()+
+                                 ylab("Number of significant GIs")+
+                                 scale_y_continuous(expand = c(0, 0,0.01,0))+
+                                 theme(strip.text.x = element_text(size = 14),
+                                       legend.position = "bottom",
+                                       legend.title = element_blank(), 
+                                       axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))+
+                                 scale_fill_manual(values = c(apple_grey, dark_red, ikea_blue))+
+                                 geom_text(aes(label = paste0(round(prop,2))), size = 6, 
+                                           position = position_stack(vjust = 0.5), colour = "white"))
+
+
+ggsave(bar_plot_spec_gis_num, filename = "graphics/spec_GIs_group_stacked.pdf", height = 9, width = 6.5)
+
+
+```
+
+###Specificity by group
+
+It would be interesting to determine how many interactions are shared across the different groups.The package UpSetR comes in handy regarding plotting events that are shared across groups. I will have to divide the interactions between positive and negative.  
+
+```{r}
+
+sig_GIs <- results_data %>% filter(fdr < 0.1) %>% 
+                      mutate(type_gi = if_else(mpi < 0, "Negative", "Positive")) %>% 
+                       group_by(query_name, plate, well, context, type_gi) %>% 
+                       mutate(type = case_when(n() == 1 ~ "Group-specific",
+                                           n() == 3 ~ "Shared",
+                                           context == "Isolated" & n()  == 5 ~ "Invariant",
+                                           context == "Isolated" & n()  == 2 ~ "Group-specific",
+                                           context == "Crowded" & n()  == 4 ~ "Invariant",
+                                           context == "Isolated" & n()  == 4 ~ "Shared",
+                                           context == "Crowded" & n()  == 2 ~ "Shared"),
+                              group = if_else(group == "Irregular_nucleus", "Irregular\nnucleus",
+                                              group)) %>% ungroup()
+
+#I need to transform the data frame so that the groups are the columns, the double gene combination are the rows and there is a 1 when there is a significant interaction or a 0 when there is no interaction between the genes for that specific group.
+                      
+
+shared_gis <- sig_GIs %>% group_by(query_name, plate, well, context, type_gi) %>% 
+                mutate(freq = rep(1)) %>% pivot_wider(id_cols = c(plate, well, query_name, context,
+                                                                  type_gi), names_from = group,
+                                                      values_from = freq) %>% 
+                replace_na(list(Big = 0, Condensed = 0, 'Irregular\nnucleus' = 0, Normal = 0,
+                                Elongated = 0)) %>% ungroup() %>% 
+                select(plate, well, query_name, context, type_gi, Normal,`Irregular\nnucleus`,
+                       Elongated, Condensed, Big)
+
+
+
+```
+
+
+## Figure 4C
+
+I will put together tot total number of significant interactions by context, as well as the bar plot which shows the number of significant interactions invariant, shared and group-specific. 
+
+Here I will show how many significant interactions are shared with the bulk analysis. 
+
+```{r}
+
+starbucks_green <- "#006241"
+
+sig_bulk <- bulk_data %>% filter(fdr<0.1) %>% select(query_name, plate, well, mpi) %>% 
+              mutate(type_gi = if_else(mpi < 0, "Negative", "Positive"),
+                     shared = rep("Yes")) %>% select(-mpi)
+
+
+combined_interaction_data <-  results_data %>% filter(fdr < 0.1) %>%  
+                  mutate(type_gi = if_else(mpi < 0, "Negative", "Positive")) %>% 
+                  group_by(query_name, plate, well, context, type_gi) %>% 
+                  dplyr::summarise(ngis = n()) %>%
+                      ungroup() %>% 
+                  mutate(well=gsub(pattern = "(\\w)0(\\d)",replacement = "\\1\\2",x = well)) %>%
+                  mutate(type = case_when(ngis == 1 ~ "Unique",
+                                           ngis == 2 ~ "2 groups",
+                                           ngis  == 3 ~ "3 groups",
+                                           context == "Crowded" & ngis  == 4 ~ "Invariant",
+                                           context == "Isolated" & ngis  == 4 ~ "4 groups",
+                                           context == "Isolated" & ngis  == 5 ~ "Invariant")) %>% 
+                  ungroup() %>% left_join(sig_bulk) %>% 
+                  mutate(shared = if_else(is.na(shared), "No", shared)) 
+
+sig_gis_sh <-  combined_interaction_data %>% 
+                  mutate(shared = if_else(is.na(shared), "No", shared)) %>% 
+                  group_by(context, type, shared) %>% 
+                  tally() %>% mutate(prop = n/sum(n)) %>% ungroup()
+
+
+
+
+#Only 3400 interactions in the bulk are shared with the group analysis. That is less than 50 %...
+
+#As expected many more shared interactions affect the crowded cells and not so many the isolated cells. 
+
+#I will make two barplots, one showing the absolute numbers of interactions shared between isolated and crowded, and then another showing the proportions based on the type. 
+
+##############################################################################################################
+
+#Bar plot absolute numbers by context. 
+
+sig_gis_sh_ctxt <- sig_gis_sh %>% group_by(context, shared) %>% dplyr::summarise(n = sum(n)) %>% 
+                      mutate(prop = n/sum(n)) 
+
+bar_plot_shared_ctxt <- print(ggplot(sig_gis_sh_ctxt %>% ungroup() %>% 
+                                        mutate(context = factor(context, 
+                                                                levels = c("Isolated", "Crowded"))),
+                                   aes(x = context, y = prop, fill = shared, label = prop))+
+                                   geom_bar(position = "stack", stat = "identity")+
+                                   bar_plot_theme()+
+                                   ylab("Proportion of significant GIs")+
+                                   scale_y_continuous(expand = c(0, 0,0.01,0))+
+                                   theme(strip.text.x = element_text(size = 14),
+                                         legend.position = "bottom",
+                                         legend.title = element_text(size = 20, hjust = 0.5), 
+                                         axis.text.x = element_text(angle = 45, hjust = 1, 
+                                                                    vjust = 1))+
+                                   scale_fill_manual(values = c("lightgoldenrod2",
+                                                                starbucks_green))+
+                                   geom_text(data = sig_gis_sh_ctxt %>% filter(prop > 0.08) %>%
+                                               ungroup() %>% 
+                                                   mutate(context = 
+                                                            factor(context, levels =
+                                                                     c("Isolated","Crowded"))),
+                                             aes(label = paste0(round(prop,2))), size = 6, 
+                                             position = position_stack(vjust = 0.5), 
+                                             colour = "white")+
+                                   labs(fill ="Shared with bulk analysis")+
+                                   guides(fill = guide_legend(title.hjust = 0.5)))
+
+
+##############################################################################################################
+
+#Bar plot by type of interaction
+
+bar_plot_shared_type <- print(ggplot(sig_gis_sh %>% ungroup() %>% 
+                                        mutate(context = factor(context, levels = c("Isolated","Crowded")),
+                                           type = factor(type, levels = c("Unique", "2 groups", "3 groups", 
+                                                                          "4 groups","Invariant"))), 
+                                         aes(x = type, y = prop, fill = shared, label = prop))+
+                                         geom_bar(position = "stack", stat = "identity")+
+                                         bar_plot_theme()+
+                                         ylab("Proportion of significant GIs")+
+                                         scale_y_continuous(expand = c(0, 0,0.01,0))+
+                                         theme(strip.text.x = element_text(size = 20),
+                                               legend.position = "bottom",
+                                               legend.title = element_text(size = 20), 
+                                               axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))+
+                                         scale_fill_manual(values = c("lightgoldenrod2", starbucks_green))+
+                                         geom_text(data = sig_gis_sh %>% filter(prop > 0.08) %>% 
+                                                   mutate(context = 
+                                                            factor(context, levels = c("Isolated","Crowded"))),
+                                                   aes(label = paste0(round(prop,2))), size = 6, 
+                                                   position = position_stack(vjust = 0.5), colour = "white")+
+                                         facet_grid(~context, scales = "free_x", space = "free")+
+                                         labs(fill ="Shared with bulk analysis")+
+                                         guides(fill = guide_legend(title.hjust = 0.5)))
+
+
+arr_gis_shrd_bulk <- ggarrange(bar_plot_shared_ctxt, bar_plot_shared_type, ncol = 2, common.legend = T, 
+                                legend = "bottom", widths = c(1,2.8),
+                                labels = c("C", "D"),font.label = list(size = 16, face = "bold"), 
+                                label.y = 1.01)
+
+ggsave(arr_gis_shrd_bulk, filename = "graphics/arr_gis_shrd_bulk_cell_count.pdf", height = 9, width = 14)
+
+
+
+```

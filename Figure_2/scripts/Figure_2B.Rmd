@@ -1,0 +1,600 @@
+---
+title: "hclustering_filtering_datasets"
+author: "Vera Peters"
+date: "11/02/2020"
+output:
+  html_document: default
+  word_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+## Objective: 
+
+Create hierarchically clustered heatmaps of genetic interaction profile correlation and morphology feature correlation datasets. In this markdown, genetic interaction profile correlation and morphology feature correlation datasets will be filtered to keep only genes of interest (genes with complex annotation and nearest neighbors), do hierarchical clustering (a) based on morphology feature correlation values and b) based on genetic interaction profile correlation values) and create (interactive) heatmaps of clustered matrices.
+
+## Chunk Description: 
+
+- Load packages and data (chunks 1 & 2)
+- Tidy up datasets and create vector containing genes of interest (chunk 3)
+- Filter datasets for genes of interest, normalize correlation values and create matrices (chunk 4)
+- Create common matrix and heatmap without clustering (chunk 5)
+- Hierarchical clustering based on morphology feature correlation dataset, heatmap and interactive heatmap (chunks 6 - 8)
+- Hierarchical clustering based on genetic interaction profile correlation dataset, heatmap and interactive heatmap (chunks 9 - 11)
+- Density histograms before and after normalization of correlation values (chunk 12)
+
+
+## 1. Load packages
+
+```{r}
+
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(gplots)
+library(heatmaply)
+
+```
+
+## 2. Load datasets
+
+```{r}
+
+# Genetic interaction profile correlations for Fly (based on cell count):
+# This file is named GI_corrs, in the markdown mostly referred to as "cellcount"
+# Morphology feature correlations for Fly:
+load(file = "Figure_2_B_2S1.RData")
+# This file is named feature_corrs
+
+```
+
+## 3. Tidy up the datasets and create filter vector for genes of interest
+
+```{r}
+
+# Use Florian's code to separate gene and IDs into single columns:
+# For cell count-based data:
+fly_correlation_cellcount <- GI_corrs %>%
+  separate(x, c("genex", "idx"), sep = "öö")%>%
+  separate(y, c("geney", "idy"), sep = "öö") %>%
+  dplyr::select(genex, geney, idx, idy, r) 
+dim(fly_correlation_cellcount)
+# [1] 23526370        5
+# For feature-based data:
+fly_correlation_features <- feature_corrs %>%
+  separate(x, c("genex", "idx"), sep = "öö")%>%
+  separate(y, c("geney", "idy"), sep = "öö") %>%
+  dplyr::select(genex, geney, idx, idy, r) 
+dim(fly_correlation_features)
+# [1] 23526370        5
+
+# Add columns "complex_1" and "complex_2" as well as "type" (describing if the two genes are annotated with the sam complex or not)
+fly_corr_cellcount_anno <- fly_correlation_cellcount %>% 
+  rename(Gene_name = genex) %>% 
+  left_join((fly_complex_annotations %>% select(Gene_name, complex) %>% drop_na() %>% distinct()), by = "Gene_name") %>%      # get complex annotation for gene x
+  rename(Gene_1 = Gene_name, Complex_1 = complex) %>% 
+  rename(Gene_name = geney) %>% 
+  left_join((fly_complex_annotations %>% select(Gene_name, complex) %>% drop_na() %>% distinct()), by = "Gene_name") %>%      # get complex annotation for gene y
+  rename(Gene_2 = Gene_name, Complex_2 = complex) %>% 
+  mutate(type = ifelse(Complex_1 == Complex_2, "internal", "external"))
+dim(fly_corr_cellcount_anno)
+
+fly_corr_features_anno <- fly_correlation_features %>% 
+  rename(Gene_name = genex) %>% 
+  left_join((fly_complex_annotations %>% select(Gene_name, complex) %>% drop_na() %>% distinct()), by = "Gene_name") %>%      # get complex annotation for gene x
+  rename(Gene_1 = Gene_name, Complex_1 = complex) %>% 
+  rename(Gene_name = geney) %>% 
+  left_join((fly_complex_annotations %>% select(Gene_name, complex) %>% drop_na() %>% distinct()), by = "Gene_name") %>%      # get complex annotation for gene y
+  rename(Gene_2 = Gene_name, Complex_2 = complex) %>% 
+  mutate(type = ifelse(Complex_1 == Complex_2, "internal", "external"))
+dim(fly_corr_cellcount_anno)
+
+#### Filtering ####
+
+# Filtering is supposed to be based on the genetic interaction profile correlation data, so I'll continue with the cellcount dataset to create a vector of genes of interest
+
+# I wanna keep 
+# 1. all the genes which have a complex annotation 
+# -> For this, I can just use the fly_complex_annotation dataframe's column "Gene_name" as a vector
+genes_annotated_vec <- fly_complex_annotations[["Gene_name"]]
+
+# 2. For each gene, I wanna keep the "nearest not-annotated neighbor", meaning the gene (pair) with the highest correlation, for gene pairs in which only one gene is annotated
+# -> This is what I'm trying now:
+
+# Filter out all the rows, in which both genes do not have a complex annotation (cause I wanna plot genes with complex annotations plus nearest neighbours)
+# e.g. keep only rows, in which at least one gene has a complex annotation
+# And add new types complex_1_anno and complex_2_anno, describing which of the two genes has a complex annotation
+fly_corr_cellcount_anno_filter <- fly_corr_cellcount_anno %>% 
+  filter(! (is.na(Complex_1) & is.na(Complex_2))) %>% 
+  mutate(type = ifelse(is.na(Complex_1), "complex_2_anno", 
+                       ifelse(is.na(Complex_2), "complex_1_anno", type)))
+dim(fly_corr_cellcount_anno_filter)
+# [1] 2502000       8
+
+# Now, I wanna have a for-loop looking like this:
+
+# filter ! (type == "internal" | type == "external")
+# for each annotated gene (filtered already in step above)
+#       filter: Gene_1 == i | Gene_2 == i
+#       arrange by desc correlation value
+#       get highest correlation value (maybe use do head (.1))
+#       write gene pair (or whole row) into new dataframe/list
+# using: genes_annotated_vec
+
+# Filter dataset: only rows, in which one gene is annotated and the other gene is not annotated
+fly_corr_cellcount_anno_filter_nonanno <- fly_corr_cellcount_anno_filter %>% 
+  filter(! (type == "internal" | type == "external")) 
+
+# Create empty list to add rows (resulting from for loop)
+nearest_neighbors_list <- list()
+
+# for loop:
+# Filter dataset for Gene_1 OR Gene_2 being member of annotated_genes list, arrange r correlation values (descending), take top row (highest correlation value), write this row in nearest_neighbors_list
+for (i in 1:length(genes_annotated_vec)) {
+  temp_df <- (fly_corr_cellcount_anno_filter_nonanno %>% 
+               filter((Gene_1 == genes_annotated_vec[i] | Gene_2 == genes_annotated_vec[i])) %>% # note: Gene_1 = Gene_2 = i already filtered out by filtering for non-internal
+               arrange(desc(r)) %>% 
+               do(head(.,1)))
+  nearest_neighbors_list[[i]] <- temp_df
+  
+}
+# Convert list to dataframe
+nearest_neighbors_df <- do.call("rbind", nearest_neighbors_list)
+dim(nearest_neighbors_df)
+# [1] 373   8
+
+# Now:
+# 1. filtering the fly_corr_cellcount_filter dataset for rows, in which both genes are annotated
+# 2. rbind the resulting dataframe with the "nearest neighbors dataframe"
+
+fly_corr_cellcount_anno_nearest <- fly_corr_cellcount_anno_filter %>% 
+  drop_na()
+dim(fly_corr_cellcount_anno_nearest)
+# [1] 70125     8
+fly_corr_cellcount_anno_nearest <- rbind(fly_corr_cellcount_anno_nearest, nearest_neighbors_df)
+dim(fly_corr_cellcount_anno_nearest)
+# [1] 70498     8
+
+# Bind gene name and IDs back together
+fly_corr_cellcount_anno_nearest_unite <- fly_corr_cellcount_anno_nearest %>% 
+  unite(col = "Gene_1", Gene_1, idx, sep = "öö") %>% 
+  unite(col = "Gene_2", Gene_2, idy, sep = "öö")
+
+# Create Gene_name vector (by binding Gene_1 and Gene_2 together, used for filtering original datasets)
+gene_1_vec <- (fly_corr_cellcount_anno_nearest_unite %>% select(Gene_1) %>% distinct())[["Gene_1"]]
+gene_2_vec <- (fly_corr_cellcount_anno_nearest_unite %>% select(Gene_2) %>% distinct())[["Gene_2"]]
+gene_vec <- c(gene_1_vec, gene_2_vec) %>% unique() %>% sort()
+length(gene_vec)
+# [1] 650
+
+```
+
+## 4. Filter original data for genes of interest, normalize/modify values and create matrices
+
+```{r}
+
+# Find out max value of both datasets after normalization -> needed for rescaling
+max((GI_corrs %>%  mutate(r_scaled = r/sd(r)) %>%  filter((x %in% gene_vec) & (y %in% gene_vec)))$r_scaled)
+# [1] 8.529139
+max((feature_corrs %>%  mutate(r_scaled = r/sd(r)) %>%  filter((x %in% gene_vec) & (y %in% gene_vec)))$r_scaled)
+# [1] 2.767869
+# Overall maximum value is 8.529139 -> used for scaling
+
+#### GI_corrs (genetic interaction profile correlation) ####
+
+# Normalization, filtering, scaling:
+filtered_cellcount <- GI_corrs %>% 
+  mutate(r_scaled = r/sd(r)) %>%                                              # normalization: divide all r values by the standard deviation of r
+  filter((x %in% gene_vec) & (y %in% gene_vec)) %>%                           # filter for genes in the vector containing genes of interest
+  mutate(r_scaled = ifelse(r_scaled < 0, 0, r_scaled)) %>%                    # set all values to be = 0 if < 0
+  mutate(r_scaled = r_scaled/8.529139) %>%                                    # rescale by dividing through maximum r_scaled value (considering both datasets)
+  mutate(r_scaled = -1*r_scaled)                                              # calculate *(-1) (only in the GI_corrs dataset, used for colors in heatmap)
+nrow(filtered_cellcount)
+# [1] 210925
+
+# Spread to matrix
+filtered_cellcount_spreaded <- filtered_cellcount %>% 
+  select(-r) %>% 
+  spread(y, r_scaled) %>% 
+  arrange(x) %>% 
+  column_to_rownames("x")
+filtered_cellcount_spreaded <- filtered_cellcount_spreaded[,order(colnames(filtered_cellcount_spreaded))]
+dim(filtered_cellcount_spreaded)
+# [1] 649 649
+
+# Symmetrical?
+identical(rownames(filtered_cellcount_spreaded), colnames(filtered_cellcount_spreaded))
+# [1] FALSE
+which(! rownames(filtered_cellcount_spreaded) %in% colnames(filtered_cellcount_spreaded))
+# [1] 1
+which(! colnames(filtered_cellcount_spreaded) %in% rownames(filtered_cellcount_spreaded))
+# [1] 649
+
+# First rowname not present as columnname and last columnname not present as rowname
+# Add this row/column and set them to NA
+
+rownames(filtered_cellcount_spreaded)[1]
+# "5-HT1Böö19_A11"
+colnames(filtered_cellcount_spreaded[649])
+# "zetaCOPöö06_M15"
+
+filtered_cellcount_spreaded <- filtered_cellcount_spreaded %>% 
+  rownames_to_column("x") %>% 
+  add_row(x = "zetaCOPöö06_M15") %>% 
+  arrange(x) %>% 
+  mutate("5-HT1Böö19_A11" = NA) %>% 
+  column_to_rownames("x")
+filtered_cellcount_spreaded <- filtered_cellcount_spreaded[,order(colnames(filtered_cellcount_spreaded))]
+dim(filtered_cellcount_spreaded)
+# [1] 650 650
+# Symmetrical?
+identical(rownames(filtered_cellcount_spreaded), colnames(filtered_cellcount_spreaded))
+# TRUE
+
+# Generate symmetrical matrix (with both triangles containing values)
+cellcount_symm <- filtered_cellcount_spreaded
+cellcount_symm[lower.tri(cellcount_symm)] <- t(cellcount_symm)[lower.tri(t(cellcount_symm))]
+dim(cellcount_symm)
+# [1] 650 650
+
+#### Feature_corrs (morphology feature correlation) ####
+
+# Normalization, filtering, scaling:
+filtered_features <- feature_corrs %>% 
+  mutate(r_scaled = r/sd(r)) %>%                                            # normalization: divide all r values by the standard deviation of r
+  filter((x %in% gene_vec) & (y %in% gene_vec)) %>%                         # filter for genes in the vector containing genes of interest
+  mutate(r_scaled = ifelse(r_scaled < 0, 0, r_scaled)) %>%                  # set all values to be = 0 if < 0 ### ! no calculation *(-1) !
+  mutate(r_scaled = r_scaled/8.529139)                                      # rescale by dividing through maximum r_scaled value (considering both datasets)
+nrow(filtered_cellcount)
+# [1] 210925
+
+# Spread to matrix
+filtered_features_spreaded <- filtered_features %>% 
+  select(-r) %>% 
+  spread(y, r_scaled) %>% 
+  arrange(x) %>% 
+  column_to_rownames("x")
+filtered_features_spreaded <- filtered_features_spreaded[,order(colnames(filtered_features_spreaded))]
+dim(filtered_features_spreaded)
+# [1] 649 649
+
+# Symmetrical?
+identical(rownames(filtered_features_spreaded), colnames(filtered_features_spreaded))
+# [1] FALSE
+which(! rownames(filtered_features_spreaded) %in% colnames(filtered_features_spreaded))
+# [1] 1
+which(! colnames(filtered_features_spreaded) %in% rownames(filtered_features_spreaded))
+# [1] 649
+
+# First rowname not present as columnname and last columnname not present as rowname
+# Add this row/column and set them to NA
+
+rownames(filtered_features_spreaded)[1]
+# "5-HT1Böö19_A11"
+colnames(filtered_features_spreaded[649])
+# "zetaCOPöö06_M15"
+
+filtered_features_spreaded <- filtered_features_spreaded %>% 
+  rownames_to_column("x") %>% 
+  add_row(x = "zetaCOPöö06_M15") %>% 
+  arrange(x) %>% 
+  mutate("5-HT1Böö19_A11" = NA) %>% 
+  column_to_rownames("x")
+filtered_features_spreaded <- filtered_features_spreaded[,order(colnames(filtered_features_spreaded))]
+dim(filtered_features_spreaded)
+# [1] 650 650
+# Symmetrical?
+identical(rownames(filtered_features_spreaded), colnames(filtered_features_spreaded))
+# TRUE
+
+# Generate symmetrical matrix (with both triangles containing values)
+features_symm <- filtered_features_spreaded
+features_symm[lower.tri(features_symm)] <- t(features_symm)[lower.tri(t(features_symm))]
+dim(features_symm)
+# [1] 650 650
+
+```
+
+## 5. Create common matrix and heatmap without clustering
+
+```{r}
+
+# Create new matrix named common_matrix, and write features_symm in there
+common_matrix <- features_symm
+# Replace lower triangle of common_matrix with values in the lower triangle of the cellcount_symm matrix
+common_matrix[lower.tri(common_matrix)] <- cellcount_symm[lower.tri(cellcount_symm)]
+
+# Generate heatmap:
+common_matrix_matrix <- data.matrix(common_matrix)
+
+heatmap.2(common_matrix_matrix, 
+          Rowv = FALSE,
+          Colv = FALSE,
+          dendrogram = "none",
+          col = c((colorRampPalette(c("darkblue", "white", "darkorange2"))(100))),
+          trace = "none",
+          na.color = "darkorange4")
+
+```
+
+## 6. Hierarchical clustering - based on morphology feature correlations
+
+```{r}
+
+# Create hierarchical clustering vector, based on feature correlations:
+distance_features <- dist(features_symm)
+ordered_features <- hclust(distance_features)$order
+# Ordered_features is a vector containing the order of hierarchical clustered columns/rows based on the orgininal matrix and can be used to order both symmetrical matrices according to clusters generated for the feature correlation values
+
+# Clustered matrix for features:
+features_symm_cluster_features <- features_symm[ordered_features, ordered_features]
+
+# Clustered matrix for cell count:
+cellcount_symm_cluster_features <- cellcount_symm[ordered_features, ordered_features]
+
+# Make sure that both matrices are ordered the same way:
+identical(rownames(features_symm_cluster_features), rownames(cellcount_symm_cluster_features))
+identical(colnames(features_symm_cluster_features), colnames(cellcount_symm_cluster_features))
+# both return TRUE
+
+# Generate common clustered matrix of both clustered matrices
+common_matrix_clustered_features <- features_symm_cluster_features
+common_matrix_clustered_features[lower.tri(common_matrix_clustered_features)] <- cellcount_symm_cluster_features[lower.tri(cellcount_symm_cluster_features)]
+
+```
+
+## 7. Heatmap of hierarchical clustered matrix (clustering based on morphology feature correlation)
+
+```{r}
+
+common_matrix_clustered_features_matrix <- data.matrix(common_matrix_clustered_features)
+
+heatmap.2(common_matrix_clustered_features_matrix, 
+          Rowv = FALSE,
+          Colv = FALSE,
+          col = c((colorRampPalette(c("darkblue", "white", "darkorange2"))(100))),
+          trace = "none",
+          dendrogram = "none",
+          na.color = "darkorange4")
+
+```
+
+## 8. Interactive Heatmap of hierarchical clustered matrix (clustering based on morphology feature correlation), including complex annotations
+
+```{r}
+
+# Replace NA values by -1.01 (to make diagonal be plotted in dark blue, instead of white)
+common_matrix_clustered_features_matrix[is.na(common_matrix_clustered_features_matrix)] <- -1.01
+
+# Create a label names vector to plot names without öö-separator and without identifier and add complex annotation:
+labelnames_features <- as_tibble(matrix(nrow = 650, ncol = 1)) %>%
+  mutate(V1 = rownames(common_matrix_clustered_features_matrix)) %>% 
+  separate(V1, into = c("Gene_name", "ID"), sep = "öö") %>% 
+  left_join(fly_complex_annotations, by = "Gene_name") %>% 
+  mutate(complex = ifelse(is.na(complex), "no_ann", complex)) %>% 
+  unite(col = "gene", Gene_name, complex, sep = "__")
+labelnames_features_vec <- labelnames_features[["gene"]]
+
+# Plot heatmap (with row- and column labels): 
+heatmaply(common_matrix_clustered_features_matrix,
+          plot_method = "plotly",
+          colors = c((colorRampPalette(c("darkblue",  "blue3", "white", "darkorange2", "darkorange4"))(50))),
+          limits = c(-1,1),
+          Rowv = FALSE,
+          Colv = FALSE,
+          dendrogram = "none",
+          fontsize_row = 10,
+          fontsize_col = 10,
+          key.title = " Colorkey: \n blue: gen. int. profile \n orange: morph. features",
+          colorbar_len = 0.5,
+          row_text_angle = 0,
+          column_text_angle = -45,
+          main = " Heatmap of pos. pearson correlation values \n Annotated Genes and nearest neighbors, clust: morph. features",
+          margins = c(30, 30, 70, 30),
+          labRow = labelnames_features_vec,
+          labCol = labelnames_features_vec#,
+          #file = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/html/heatmap_features.html"
+          )
+
+# Plot heatmap (without row- and column labels): 
+heatmaply(common_matrix_clustered_features_matrix,
+          plot_method = "plotly",
+          colors = c((colorRampPalette(c("darkblue",  "blue3", "white", "darkorange2", "darkorange4"))(50))),
+          limits = c(-1,1),
+          Rowv = FALSE,
+          Colv = FALSE,
+          dendrogram = "none",
+          key.title = " Colorkey: \n blue: gen. int. profile \n orange: morph. features",
+          colorbar_len = 0.5,
+          row_text_angle = 0,
+          column_text_angle = -45,
+          main = " Heatmap of pos. pearson correlation values \n Annotated Genes and nearest neighbors, clust: morph. features",
+          margins = c(30, 30, 70, 30),
+          showticklabels = FALSE
+          )
+
+```
+
+## 9. Hierarchical clustering - based on genetic interaction profile correlations (cellcount)
+
+```{r}
+
+# Create hierarchical clustering vector, based on genetic interaction profile correlations:
+distance_cellcount <- dist(cellcount_symm)
+ordered_cellcount <- hclust(distance_cellcount)$order
+# Ordered_cellcount is a vector containing the order of hierarchical clustered columns/rows based on the orgininal matrix and can be used to order both symmetrical matrices according to clusters generated for the genetic interaction profile correlation 
+
+# Clustered matrix for features:
+features_symm_cluster_cellcount <- features_symm[ordered_cellcount, ordered_cellcount]
+
+# Clustered matrix for cell count:
+cellcount_symm_cluster_cellcount <- cellcount_symm[ordered_cellcount, ordered_cellcount]
+
+# Make sure that both matrices are ordered the same way:
+identical(rownames(features_symm_cluster_cellcount), rownames(cellcount_symm_cluster_cellcount))
+identical(colnames(features_symm_cluster_cellcount), colnames(cellcount_symm_cluster_cellcount))
+# both return TRUE
+
+# Generate common clustered matrix of both clustered matrices
+common_matrix_clustered_cellcount <- features_symm_cluster_cellcount
+common_matrix_clustered_cellcount[lower.tri(common_matrix_clustered_cellcount)] <- cellcount_symm_cluster_cellcount[lower.tri(cellcount_symm_cluster_cellcount)]
+
+```
+
+## 10. Heatmap of hierarchical clustered matrix (clustering based on genetic interaction profile correlation)
+
+```{r}
+
+common_matrix_clustered_cellcount_matrix <- data.matrix(common_matrix_clustered_cellcount)
+
+heatmap.2(common_matrix_clustered_cellcount_matrix, 
+          Rowv = FALSE,
+          Colv = FALSE,
+          col = c((colorRampPalette(c("darkblue", "white", "darkorange2"))(100))),
+          trace = "none",
+          dendrogram = "none",
+          na.color = "darkorange4")
+
+```
+
+## 11. Interactive Heatmap of hierarchical clustered matrix (clustering based on gen. int. profile correlation), including complex annotations
+
+```{r}
+
+# Replace NA values by -1.01 (to make diagonal be plotted in dark blue, instead of white)
+common_matrix_clustered_cellcount_matrix[is.na(common_matrix_clustered_cellcount_matrix)] <- -1.01
+
+# Create a label names vector to plot names without öö-separator and without identifier and add complex annotation:
+labelnames_cellcount <- as_tibble(matrix(nrow = 650, ncol = 1)) %>%
+  mutate(V1 = rownames(common_matrix_clustered_cellcount_matrix)) %>% 
+  separate(V1, into = c("Gene_name", "ID"), sep = "öö") %>% 
+  left_join(fly_complex_annotations, by = "Gene_name") %>% 
+  mutate(complex = ifelse(is.na(complex), "no_ann", complex)) %>% 
+  unite(col = "gene", Gene_name, complex, sep = "__")
+labelnames_cellcount_vec <- labelnames_cellcount[["gene"]]
+
+# Plot heatmap (with row- and column labels): 
+heatmaply(common_matrix_clustered_cellcount_matrix,
+          plot_method = "plotly",
+          colors = c((colorRampPalette(c("darkblue",  "blue3", "white", "darkorange2", "darkorange4"))(50))),
+          limits = c(-1,1),
+          Rowv = FALSE,
+          Colv = FALSE,
+          dendrogram = "none",
+          fontsize_row = 10,
+          fontsize_col = 10,
+          key.title = " Colorkey: \n blue: gen. int. profile \n orange: morph. features",
+          colorbar_len = 0.5,
+          row_text_angle = 0,
+          column_text_angle = -45,
+          main = " Heatmap of pos. pearson correlation values \n Annotated Genes and nearest neighbors, clust: gen. int. profile",
+          margins = c(30, 30, 70, 30),
+          labRow = labelnames_cellcount_vec,
+          labCol = labelnames_cellcount_vec#,
+          #file = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/html/heatmap_genintprofile.html"
+          )
+
+# Plot heatmap (without row- and column labels): 
+heatmaply(common_matrix_clustered_cellcount_matrix,
+          plot_method = "plotly",
+          colors = c((colorRampPalette(c("darkblue",  "blue3", "white", "darkorange2", "darkorange4"))(50))),
+          limits = c(-1,1),
+          Rowv = FALSE,
+          Colv = FALSE,
+          dendrogram = "none",
+          key.title = " Colorkey: \n blue: gen. int. profile \n orange: morph. features",
+          colorbar_len = 0.5,
+          row_text_angle = 0,
+          column_text_angle = -45,
+          main = " Heatmap of pos. pearson correlation values \n Annotated Genes and nearest neighbors, clust: gen. int. profile",
+          margins = c(30, 30, 70, 30),
+          showticklabels = FALSE
+          )
+          
+```
+
+## 12. Density histograms before and after normalization of correlation values
+
+```{r}
+
+#Define b110 theme:
+theme_b110<-function(){
+  theme_classic() +
+  theme(
+    axis.text=element_text(size = 16), 
+    axis.title=element_text(size = 16),
+    plot.title = element_text(size = 22,hjust = 0.5,face="bold"),
+    legend.title = element_text(size = 22),
+    legend.text = element_text(size =16),
+    legend.position = "bottom"
+    )
+}
+
+#### GI_corrs ####
+
+# Before normalization
+GI_corrs %>% 
+  ggplot(aes(x = r)) +
+  geom_histogram(binwidth = 0.005, fill = "blue3") +
+  theme_b110() +
+  xlab("pearson correlation") +
+  ggtitle(" Density histogram of genetic interaction profile correlation \n before normalization")
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_GIcorrs_beforenorm.png", width = 10, height = 10)
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_GIcorrs_beforenorm.pdf", width = 10, height = 10)
+
+# After normalization
+filtered_cellcount %>% 
+  ggplot(aes(x = r_scaled)) +
+  geom_histogram(binwidth = 0.005, fill = "blue3") +
+  theme_b110() +
+  xlab("normalized pearson correlation") +
+  ggtitle(" Density histogram of genetic interaction profile correlation \n after normalization, rnorm = r/sd(r), and scaling")
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_GIcorrs_afternorm.png", width = 10, height = 10)
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_GIcorrs_afternorm.pdf", width = 10, height = 10)
+
+# After normalization (zoom)
+filtered_cellcount %>% 
+  ggplot(aes(x = r_scaled)) +
+  geom_histogram(binwidth = 0.005, fill = "blue3") +
+  theme_b110() +
+  xlab("normalized pearson correlation") +
+  scale_y_continuous(limits = c(0,3000)) +
+  ggtitle(" Density histogram of genetic interaction profile correlation \n after normalization, rnorm = r/sd(r), and scaling (zoom)")
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_GIcorrs_afternorm_zoom.png", width = 10, height = 10)
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_GIcorrs_afternorm_zoom.pdf", width = 10, height = 10)
+
+
+#### Feature_corrs ####
+
+# Before normalization
+feature_corrs %>% 
+  ggplot(aes(x = r)) +
+  geom_histogram(binwidth = 0.005, fill = "darkorange2") +
+  theme_b110() +
+  xlab("pearson correlation") +
+  ggtitle(" Density histogram of morphology feature correlation \n before normalization")
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_featurecorrs_beforenorm.png", width = 10, height = 10)
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_featurecorrs_beforenorm.pdf", width = 10, height = 10)
+
+# After normalization
+filtered_features %>% 
+  ggplot(aes(x = r_scaled)) +
+  geom_histogram(binwidth = 0.002, fill = "darkorange2") +
+  theme_b110() +
+  xlab("normalized pearson correlation") +
+  ggtitle(" Density histogram of genetic interaction profile correlation \n after normalization, rnorm = r/sd(r), and scaling")
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_featurecorrs_afternorm.png", width = 10, height = 10)
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_featurecorrs_afternorm.pdf", width = 10, height = 10)
+
+# After normalization (zoom)
+filtered_features %>% 
+  ggplot(aes(x = r_scaled)) +
+  geom_histogram(binwidth = 0.001, fill = "darkorange2") +
+  theme_b110() +
+  xlab("normalized pearson correlation") +
+  scale_y_continuous(limits = c(0,700)) +
+  ggtitle(" Density histogram of genetic interaction profile correlation \n after normalization, rnorm = r/sd(r), and scaling (zoom)")
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_featurecorrs_afternorm_zoom.png", width = 10, height = 10)
+#ggsave(filename = "/Users/b110/Desktop/VeraPeters/hclustering_fly_cellcount_features/Plots/densityhist_featurecorrs_afternorm_zoom.pdf", width = 10, height = 10)
+
+```

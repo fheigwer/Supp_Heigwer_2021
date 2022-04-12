@@ -1,0 +1,10 @@
+FileType	bam	Read submission file type								
+sample	study	instrument_model	library_name	library_source	library_selection	library_strategy	file_name	file_md5	library_construction_protocol	library_layout
+CDK2RLUC_1	PRJEB48815	Illumina NextSeq 550	NA	TRANSCRIPTOMIC	Oligo-dT	RNA-Seq	TX_2_possorted_genome_bam.bam	a7f9d003cbee098336188c3b709ac6e5	10x Chromium 3' V3	PAIRED
+CDK2RLUC_2	PRJEB48815	Illumina NextSeq 550	NA	TRANSCRIPTOMIC	Oligo-dT	RNA-Seq	TX_6_possorted_genome_bam.bam	989c460790c9a68d4fd699346e349f99	10x Chromium 3' V3	PAIRED
+CSN5CDK2_1	PRJEB48815	Illumina NextSeq 550	NA	TRANSCRIPTOMIC	Oligo-dT	RNA-Seq	TX_4_possorted_genome_bam.bam	a78e819ed30abd43dd47e58ed7f9a171	10x Chromium 3' V3	PAIRED
+CSN5RLUC_1	PRJEB48815	Illumina NextSeq 550	NA	TRANSCRIPTOMIC	Oligo-dT	RNA-Seq	TX_1_possorted_genome_bam.bam	8f363b466963f60d05307371576bc337	10x Chromium 3' V3	PAIRED
+CSN8CDK2_2	PRJEB48815	Illumina NextSeq 550	NA	TRANSCRIPTOMIC	Oligo-dT	RNA-Seq	TX_8_possorted_genome_bam.bam	dee12c432289bd12f498284cf38aa2e3	10x Chromium 3' V3	PAIRED
+CSN8RLUC_2	PRJEB48815	Illumina NextSeq 550	NA	TRANSCRIPTOMIC	Oligo-dT	RNA-Seq	TX_5_possorted_genome_bam.bam	a20f63c781541358b010c9f253e27a23	10x Chromium 3' V3	PAIRED
+RLUCRLUC_1	PRJEB48815	Illumina NextSeq 550	NA	TRANSCRIPTOMIC	Oligo-dT	RNA-Seq	TX_3_possorted_genome_bam.bam	b5b97d3609163f8d76d8fe7807bc8ae7	10x Chromium 3' V3	PAIRED
+RLUCRLUC_2	PRJEB48815	Illumina NextSeq 550	NA	TRANSCRIPTOMIC	Oligo-dT	RNA-Seq	TX_7_possorted_genome_bam.bam	469e7ab253864b1f1819edf70942256a	10x Chromium 3' V3	PAIRED

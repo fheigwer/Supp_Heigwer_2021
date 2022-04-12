@@ -1,0 +1,31 @@
+MAGE-TAB Version	1.1
+Investigation Title	Single Cell RNA-Sequencing of RNAi treated Schneiders S2 cells
+Experiment Description	2 million cells were seeded in a 2 ml medium containing 58 µg of total dsRNA. For coRNAi treatments 28 µg of each single dsRNA were used. After treatment cells were left to incubate 4 d at 25 °C, and plates were sealed with Parafilm to avoid medium evaporation. 8 samples were prepared with the following dsRNA treatment combinations: RLUC/RLUC x 2, CSN5/RLUC, CSN8/RLUC, CDK2/CSN5, CDK2/CSN8, CDK2/RLUC 2x . dsRNAs were taken from the HD3-dsRNA-library. Two dsRNAs per gene were pooled.  The single-cell transcriptomic sequencing experiment was performed with 10x Genomics technology according to the manufacturer’s protocol.
+Experimental Factor Name	disease	genotype	RNA interference
+Experimental Factor Type	disease	genotype	RNA interference
+Experimental Factor Term Source REF	EFO	EFO	EFO
+Experimental Factor Term Accession Number	EFO_0000408	EFO_0000513	GO_0016246
+Person Last Name	Heigwer	Boutros
+Person First Name	Florian	Michael
+Person Mid Initials		
+Person Email	f.heigwer@dkfz.de	m.boutros@dkfz.de
+Person Phone	00496221421957	
+Person Fax		
+Person Address	Im Neuenheimer Feld 580 69120 Heidelberg Germany	Im Neuenheimer Feld 580 69120 Heidelberg Germany
+Person Affiliation	Devision of Signaling and Functional Genomics German Cancer Research Center (DKFZ) 	Devision of Signaling and Functional Genomics German Cancer Research Center (DKFZ) 
+Person Roles	submitter	investigator;submitter
+Date of Experiment	2020-12-01
+Public Release Date	2022-01-03
+Protocol Name	Cell suspension	Chromium step 1	Chromium step2	NextSeq 550	Cell culture
+Protocol Type	sample collection protocol	nucleic acid extraction protocol	nucleic acid library construction protocol	nucleic acid sequencing protocol	growth protocol
+Protocol Term Source REF	EFO	EFO	EFO	EFO	EFO
+Protocol Term Accession Number	EFO_0005518	EFO_0002944	EFO_0004184	EFO_0004170	EFO_0003789
+Protocol Description	1. Scrape cells gently with corning cell scraper (Corning)2. Re-suspend cells gently (e.g. avoid making bubbles) and transfer to 15 ml tube (2 ml each sample in separate falcon). 3. Centrifuge at 260 G for 5 min @25 C4. Remove medium by gentle pouring it off 5. Add 10 ml filtered, room temperature PBS without disturbing the pellet (gentle pouring) and remove PBS again (gentle pouring) 6. Re-suspend cells gently in ~200 ul filtered PBS 7. Filter 200 µl cells through 20 μm single cell strainer  in fresh Eppie 8. Dilute cells 1:10 (20 µl cells in 180 µl PBS). Count cells afterwards with Luna BW count wo Trypan blue10. Dilute each sample to 21459 c/100µl (214590 c/ml)	The single-cell transcriptomic sequencing experiment was performed with 10x Genomics technology according to the manufacturer’s protocol (CG000183_ChromiumSingleCell3'_v3_UG_Rev C.pdf) using the Chromium Controller instrument, the Chromium Single Cell 3′ Library, and Gel Bead Kit v3, and the Chromium Single Cell B Chip Kit. All cleanup steps were conducted using the Agencourt AMPure XP beads (Beckman Coulter). In short, about 10,000 cells from each sample were loaded in one lane of the chip using PBS-Triton (0.1%) primed tips to reduce cell loss.	 Gel Beads in Emulsion (GEMs) were successfully generated for all samples, albeit we noticed a reduced volume of recovered GEMs for two samples. Reverse transcription of mRNA was followed by cDNA amplification using 13 PCR cycles. The final library was generated and amplified in a Sample Index PCR using nine cycles. All libraries sequenced had an average fragment size of 470 – 520 bp. 	To minimize technical artifacts, we pooled the final libraries and the multiplex sequenced on eight lanes of a NextSeq 550 instrument with 150 bp paired-end sequencing chemistry (read1 (cell barcode) = 28bp, read2 (UMI and transcript) = 130). 	2 million cells were seeded in a 2 ml medium containing 58 µg of total dsRNA. For coRNAi treatments 28 µg of each single dsRNA were used. After treatment cells were left to incubate 4 d at 25 °C, and plates were sealed with Parafilm to avoid medium evaporation. 8 samples were prepared with the following dsRNA treatment combinations: RLUC/RLUC x 2, CSN5/RLUC, CSN8/RLUC, CDK2/CSN5, CDK2/CSN8, CDK2/RLUC 2x . dsRNAs were taken from the HD3-dsRNA-library. Two dsRNAs per gene were pooled.
+Protocol Hardware					
+Protocol Software					
+Term Source Name	EFO
+Term Source File	http://www.ebi.ac.uk/efo/
+Term Source Version	
+SDRF File	sdrf.tsv
+Comment[AEExperimentType]	RNA-seq of coding RNA from single cells
+Comment[TemplateType]	Cell line - Single-cell sequencing

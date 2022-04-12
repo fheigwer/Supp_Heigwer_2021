@@ -1,0 +1,549 @@
+---
+title: "model_testing"
+author: "Sergi"
+date: "12/16/2019"
+output: pdf_document
+abstract: In the previous markdown I have developed a random forest which classifies isolated cells into 5 groups: Big, Condensed, Elongated, Irregular nucleus and Normal. Here I will apply the model to a subsample of the syngene screen to analyse the group distributions. Then I will also carry out cross-comparisons between isolated group classifiers of the time-resolved screen and the syngene screen. 
+editor_options: 
+  chunk_output_type: console
+---
+#Package loading
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(randomForest)
+library(EBImage)
+library(e1071)
+library(plotly)
+library(Rtsne)
+library(jsonlite)
+library(RSQLite)
+library(LMGene)
+library(gridExtra)
+library(ggpubr)
+library(uwot)
+library(pryr)
+library(data.table)
+library(dtplyr)
+library(patchwork)
+library(ggrepel)
+
+density_classifier <- readRDS("model_testing/density_classifier.rds")
+
+filtering_classifier <- readRDS("model_testing/filtering_classifier.rds")
+
+```
+#Subsample
+I retrieved a subsample of cells from the syngene screen comprising around 2 million single cells. There is one plate from screens S001 to S175. From each plate 6 wells were selected and 2000 cells sampled from each. The subsample was processed following the same steps as the training set.
+##Classification
+```{r}
+
+#I have to rule out cells which are at the edges of the image.
+
+subsample_syngene <- read_csv("model_testing/subsample_processed_features.csv", col_names = T, col_types = cols(plate = col_character())) %>% 
+                            filter(DNA.m.cx > 100 & DNA.m.cx < 1948 & DNA.m.cy > 100 & DNA.m.cy < 1948) 
+
+
+subsample_syngene_iso <- subsample_syngene %>% filter(predict(filtering_classifier, subsample_syngene) == "Yes", 
+                                                      predict(density_classifier, subsample_syngene) == "Isolated")
+
+subsample_syngene_iso["group"] <- predict(rf_clean_optimized, subsample_syngene_iso)
+
+#Global numbers by group
+
+count(subsample_syngene_iso, "group") %>% as_tibble() %>% mutate(proportion = freq/nrow(subsample_syngene_iso))
+
+#As expected the majority of the cells are classified as normal (58 % of the total). There are very very few elongated cells, about 6 % of the total. 
+#Surprisingly there are quite many condensed cells, around 11-12 % of the total. 
+
+
+
+```
+###Stacked barplot
+I will make a stacked barplot with the proportions of the different groups. 
+```{r}
+
+syngene_stack_data <- count(subsample_syngene_iso, "group") %>% mutate(proportions = freq/nrow(subsample_syngene_iso)) %>% 
+                        mutate(group = factor(group, levels = c("Elongated", "Irregular_nucleus", "Condensed", "Big", "Normal")), type = rep("Average"))
+
+load("~/Desktop/Sergi_master_thesis/themes/bar_plot_theme.RData")
+
+stacked_iso_plot <- ggplot(syngene_stack_data, aes(x = type, y = proportions, fill = group, label = round(proportions, 2)))+
+                              geom_bar(position="stack", stat = "identity")+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19),
+                                    axis.ticks.x = element_blank(),
+                                    axis.text.x = element_blank(),
+                                    legend.position = "right")+
+                              #guides(fill = guide_legend(nrow = 2, override.aes = list(size = 3), title.position = "top", title.hjust = 0.5))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1.01))+
+                              scale_fill_manual(values = c(google_yellow, google_red, lacoste_green, google_green, google_blue),
+                                                labels = c("Elongated", "Irregular nucleus", "Condensed", "Big", "Normal"))+
+                              labs(fill = "Group")+
+                              ylab("Proportion of cells")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+
+ggsave(stacked_iso_plot, filename = "model_testing/plots/stacked_group_prop.pdf", height = 8, width = 6)
+
+
+
+```
+###UMAP subsample
+It will be interesting to see how the cell distribute in a UMAP plot. Since the subsample has almost half a million of isolted cells I will randomly subsample around 20,000 and coloured them based on the group. 
+```{r}
+
+#UMAP global
+
+syngene_subsample_20k <- subsample_syngene_iso %>% sample_n(20000)
+
+saveRDS(syngene_subsample_20k, file = "model_testing/subsample20k.rds")
+
+saveRDS(imp_feat_initial_rf, file = "model_testing/imp_features.rds")
+
+syngene_subsample_umap <- syngene_subsample_20k %>% select(imp_feat_initial_rf) %>% 
+                            uwot::umap(n_neighbors = 30) %>% as.tibble() %>% 
+                            dplyr::rename(dimension1 = V1, dimension2 = V2) %>% 
+                            mutate(group = syngene_subsample_20k %>% pull(group))
+
+umap_subsample_layout <- syngene_subsample_20k %>% select(imp_feat_initial_rf) %>% 
+                            uwot::umap(n_neighbors = 30, ret_model = T) 
+
+saveRDS(umap_subsample_layout, file = "model_testing/umap_layout20k.rds")
+
+
+
+umap_subset_plot <-  ggplot(syngene_subsample_umap, aes(x=dimension1, y= dimension2, color = factor(group)))+
+                            geom_point(size = 0.75)+
+                            umap_theme()+
+                            theme(
+                            legend.title = element_text(size = 16))+
+                            scale_color_manual(values = colours, labels = c("Big", "Condensed", "Elongated",
+                                                                            "Irregular nucleus", "Normal"))+
+                            guides(colour = guide_legend(nrow = 2, byrow = T, override.aes = list(size = 6)))+
+                            xlab("UMAP dimension 1")+
+                            ylab("UMAP dimension 2")+
+                            labs(color = "Group")
+
+ggsave(umap_subset_plot, height = 8, width = 8.5, filename = "model_testing/plots/umap_20k_subsample.png", device = "png")
+
+#The groups are quite well separated in the map. Normal cells occupy the central area, while the other groups are located at the edges of the cloud. 
+
+###################################################################################################################################################
+
+#UMAPs arranged
+
+#To better visualise the distribution of the groups, I will make individual UMAP plots of every class and then arranged them together in an image. 
+
+list_umaps_iso <- list()
+
+list_umaps_iso[["together"]] <- umap_subset_plot + guides(colour = guide_legend(nrow = 1, override.aes = list(size = 6)))
+
+for(state in sort(unique(syngene_subsample_umap$group))){
+  
+  list_umaps_iso[[state]] <- ggplot(syngene_subsample_umap %>% filter(group == state), aes(x=dimension1, y= dimension2, color = group))+
+                            geom_point(data = syngene_subsample_umap %>% filter(group != state), alpha = 0.3, colour = "grey", size = 0.25)+
+                            geom_point(size = 0.25)+
+                            umap_theme()+
+                            theme(
+                            legend.title = element_text(size = 16))+
+                            scale_color_manual(values = colours[which(sort(unique(syngene_subsample_umap$group)) == state)],
+                                               labels = c("Big", "Condensed", "Elongated", "Irregular nucleus", "Normal"))+
+                            guides(colour = guide_legend(override.aes = list(size = 6)))+
+                            xlab("UMAP dimension 1")+
+                            ylab("UMAP dimension 2")+
+                            labs(color = "Group")
+                            
+  
+}
+
+umap_arrg_iso <- ggarrange(plotlist = list_umaps_iso, nrow = 2, ncol = 3, common.legend = T, legend = "bottom")
+
+ggsave(umap_arrg_iso, filename = "model_testing/plots/umap_iso_alone_arrang.png", height = 9, width = 14, device = "png")
+
+#The visualisation is nicer when each group is coloured and the rest of points are grayed in the background. 
+```
+##Proportions by well
+I would like to show the group proportions in the different wells. I will show this in a scatter plot. It will give me an idea of how group proportions might vary in the different conditions. 
+```{r}
+
+#Data aggregation
+
+#I will only plot wells which have more than 200 cells sampled. 
+
+dot_plot_data <- subsample_syngene_iso %>% select(screen, plate, well, group) %>% 
+                  group_by(screen, plate, well, group) %>% 
+                  tally() %>% mutate(total_cells = sum(n), prop_cells = n/sum(n)) %>% 
+                  filter(total_cells>200) %>% ungroup() 
+
+#I need to remove the 0 of wells 1 to 9 of each row. 
+
+well_name <- dot_plot_data %>% pull(well)
+
+for (well in 1:length(well_name)){
+  
+  if(str_split(well_name[well], "")[[1]][2] == "0"){
+    
+    well_name[well] <- paste0(str_split(well_name[well], "")[[1]][1], str_split(well_name[well], "")[[1]][3])
+    
+  }
+  
+}
+
+#Assign gene names. 
+
+dot_plot_data <- dot_plot_data %>% left_join(query_genes %>% select(screen, query_name)) %>% 
+                    mutate(well = well_name) %>% 
+                    left_join(target_genes %>% select(plate, well, gene_symbol), by = c("plate", "well")) %>% 
+                    dplyr::rename(target = gene_symbol) %>% 
+                    unite(gene_pair, query_name, target,sep = "_")
+                      
+
+#Dot plot
+
+#Since I will use geom_jitter to plot the points I need to save and fix the position of them so that I can add later on the label on the point exactly. 
+
+pos <- position_jitter(seed = 1)
+
+load("~/Desktop/Sergi_master_thesis/themes/bar_plot_theme.RData")
+
+dot_plot_syngene <- ggplot(dot_plot_data, aes(x = group, y = prop_cells, colour = group, label = gene_pair))+
+                      geom_point(position = pos)+
+                      stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.25, colour = "black")+
+                      bar_plot_theme()+
+                      ylab("Proportion of cells")+
+                      scale_color_manual(values = c(colours), labels = c("Big", "Condensed", "Elongated", "Irregular nucleus", "Normal"))+
+                      theme(plot.title = element_text(size = 26, hjust = 0.5),
+                            axis.text.x = element_blank())+
+                      guides(colour = guide_legend(nrow = 1, override.aes = list(size = 6)))+
+                      ggtitle("Syngene screen")+
+                      labs(colour = "Group")+
+                      scale_y_continuous(limits = c(0, 0.9))
+                      #geom_label(data = dot_plot_prop %>% filter(context == "Crowded", proportion >0.85), position = pos, size = 3)+
+                      #geom_label_repel(data = dot_plot_data %>% filter(group == "Elongated", prop_cells > 0.2), position = pos, size = 3)
+
+#If I look at the extremes the model seems to be doing well. Conditions in which Rheb is kd give rise to higher proportion of condensed cells, while Rho1 results in high number of big cells. 
+#Surprisingly many conditions in which the proportion of elongated cells was very high, have a raw knockdown. 
+
+ggsave(dot_plot_syngene, filename = "model_testing/plots/dot_plot_well_syngene.pdf", height = 8, width = 10)
+
+```
+#Time-resolved subsample
+I want to compare the density classifiers of the present screen and the time-resolved experiment. Here I will use the density algorithm developed for the time-resolved screen pipeline. I will applied to a subsample of the data which includes cells from all screens. More specifically, 6 random plates and 20 random wells were selected from which 1000 cells were copied by condition. This gives rise to data from two replicates of 420 different conditions. 
+##Classification
+```{r}
+
+filtering_classifier_time <- readRDS("model_testing/filtering_classifier_time_screen.rds")
+
+density_classifier_time <- readRDS("model_testing/final_rf_density_classifier_time.rds")
+
+isolated_classifier_time <- readRDS("model_testing/isolated_state_classifier_time.rds")
+
+
+#Ruling out wrongly segmented cells and filtering for isolated cells. 
+
+subsample_time_screen <- readRDS("model_testing/subsample_time_screen.rds")
+
+subsample_time_screen <- subsample_time_screen %>% mutate(good_segm = predict(filtering_classifier_time, subsample_time_screen),
+                                                          context = predict(density_classifier_time, subsample_time_screen)) %>% 
+                          filter(good_segm == "Yes", context == "Isolated")
+
+#Classify cells into groups. 
+
+subsample_time_screen <- subsample_time_screen %>% mutate(group = predict(isolated_classifier_time, subsample_time_screen))
+
+#There are almost as many crowded cells as isolated cells. 
+
+count(subsample_time_screen, "group")
+
+```
+##Proportions by well
+I will compute group proportions by well to see the distribution under different conditions. 
+```{r}
+#Gene annotation time-resolved screen
+
+load("~/Desktop/Sergi_master_thesis/gene_annotation/gene_annotation_time_resolved_data.RData")
+
+query_mappin <- query_mappin %>% dplyr::rename(plate = V2, query = V3)
+
+target_mappin <- target_mappin %>% dplyr::rename(well = V2, target = V3)
+
+time_points <- tibble(screen = unique(dot_plot_data_time$screen), time = c("3 days", "4 days", "5 days", "3 days", "4 days", "5 days"))
+
+#Data aggregation and gene names addition. 
+
+dot_plot_data_time <- subsample_time_screen %>% select(screen, plate, well, group) %>% 
+                        group_by(screen, plate, well, group) %>% 
+                        tally() %>% mutate(total_cells = sum(n), prop_cells = n/sum(n)) %>% 
+                        filter(total_cells>200) %>% ungroup() %>% 
+                        left_join(query_mappin %>% select(-V1)) %>% 
+                        left_join(target_mappin %>% select(-V1)) %>% 
+                        left_join(time_points)
+
+
+#I would like to colour the dots by the time point, therefore I added a column with the time point at which cells were fixes and imaged. 
+
+#Dot plot
+
+netflix_red <- "#E50914"
+
+ikea_blue <- "#0051BA"
+  
+ikea_yellow <- "#FFDA1A"
+
+
+dot_plot_time <- ggplot(dot_plot_data_time, aes(x = group, y = prop_cells, colour = group))+
+                      geom_point(position = pos)+
+                      stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.25, colour = "black")+
+                      bar_plot_theme()+
+                      ylab("Proportion of cells")+
+                      scale_color_manual(values = colours)+
+                      theme(legend.title = element_blank(),
+                            plot.title = element_text(size = 26, hjust = 0.5),
+                            axis.text.x = element_blank())+
+                      guides(colour = guide_legend(nrow = 1, override.aes = list(size = 6)))+
+                      ggtitle("Time-resolved screen")+
+                      scale_y_continuous(limits = c(0, 0.9))
+                      #geom_label(data = dot_plot_prop %>% filter(context == "Crowded", proportion >0.85), position = pos, size = 3)+
+                      #geom_label_repel(data = dot_plot_prop %>% filter(context == "Isolated", proportion ==1), position = pos, size = 3)
+
+
+
+ggsave(dot_plot_time, filename = "model_testing/plots/dot_plot_well_time.pdf", height = 8, width = 10)
+
+```
+#Cross-comparisons
+We are interested in determining how well can we transfer a model from one dataset to the other one. For that I will apply each model to the dataset in which it was not trained. 
+##Time-resolved screen
+```{r}
+
+# Time-resolved screen.
+
+#I need to change the label of mitotic cells to irregular nucleus. 
+
+subsample_time_screen <- subsample_time_screen %>% mutate(cross_group = predict(rf_clean_optimized, subsample_time_screen)) %>% 
+                            mutate(cross_group = if_else(cross_group == "Irregular_nucleus", "Mitosis", as.character(cross_group)),
+                               match_group = if_else(group == cross_group, "Match", "No match"))
+
+count(subsample_time_screen, "match_group")
+
+#There is a match in the predictions for 84 % of the cells. 
+
+stacked_time_data <- subsample_time_screen %>% mutate(average = "average") %>% group_by(group, match_group) %>% tally() %>% 
+                      ungroup() %>% group_by(group) %>% mutate(prop_cells = n/sum(n)) %>% ungroup() %>% 
+                      mutate(group = factor(group), match_group = factor(match_group)) 
+
+#I will add the average values
+
+avg_values <- stacked_time_data %>% group_by(match_group) %>% tally(n) %>% mutate(group = "Average") %>% select(group, everything()) %>% 
+                mutate(prop_cells = n/sum(n))
+
+stacked_time_data <- stacked_time_data %>% rbind(avg_values) %>% 
+                      mutate(group = factor(group, levels = c("Average", "Big", "Condensed", "Elongated", "Mitosis", "Normal")),
+                             match_group = factor(match_group, levels = c("No match", "Match")))
+
+#In the stacked bar plots I will show the average agreement between model predictions but also the the cross-comparison across groups. 
+
+#Model matching
+
+amazon_orange <- "#FF9900"
+
+amazon_blue <- "#146eb4" 
+
+stacked_cross_comparison <- ggplot(stacked_time_data, aes(x = group, y = prop_cells,  fill = match_group, label = round(prop_cells, 2)))+
+                              geom_bar(stat = "identity", position = "stack")+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19),
+                                    axis.ticks.x = element_blank())+
+                              guides(fill = guide_legend(nrow = 1, override.aes = list(size = 3), title.position = "top", title.hjust = 0.5, reverse = T))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1.01))+
+                              scale_fill_manual(values = c(amazon_orange, amazon_blue))+
+                              labs(fill = "Model comparison")+
+                              ylab("Proportion of cells")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+#Surprisingly mitotic cells are almost all matched. It would be interesting to see if it's because the syngene model just labels more cells as mitotic. 
+
+stacked_time_data_groups <- subsample_time_screen %>% pivot_longer(cols = c(group, cross_group)) %>% 
+                              select(name, value) %>% group_by(name, value) %>% tally() %>% dplyr::rename(screen = name, group = value) %>% ungroup() %>%
+                              group_by(screen) %>% mutate(prop_cells = n/sum(n)) %>% ungroup() %>% 
+                              mutate(screen = if_else(screen == "group", "time-resolved", "syngene"),
+                                     group = factor(group, levels = c("Condensed", "Elongated", "Mitosis", "Big", "Normal"))) 
+                              
+
+
+#Group proportions         
+
+stacked_prop_time <- ggplot(stacked_time_data_groups, aes(x = screen, y = prop_cells, 
+                                                          fill = group,
+                                                          label = round(prop_cells, 2)))+
+                              geom_bar(stat = "identity", position = "stack", width = 0.75)+
+                              bar_plot_theme()+
+                              theme(legend.title = element_blank(), 
+                                    axis.text.y = element_blank(),
+                                    axis.title.y = element_blank(),
+                                    axis.ticks.y = element_blank(),
+                                    axis.line.y = element_blank(),
+                                    axis.ticks.x = element_blank(),
+                                    legend.position = "bottom")+
+                              guides(fill = guide_legend(override.aes = list(size = 5), title.hjust = 0.5, nrow = 3))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1.01))+
+                              scale_fill_manual(values = c(lacoste_green, google_yellow, google_red, google_green, google_blue))+
+                              labs(fill = "Group")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+#The syngene model labels more cells many more cells as mitotic. 
+
+arranged_stack_time <- stacked_cross_comparison + stacked_prop_time + 
+                          plot_annotation(title = "Time-resolved screen", theme = theme(plot.title = element_text(size = 26, hjust = 0.5)))+
+                            plot_layout(widths = c(2.5,1))
+                             
+ggsave(arranged_stack_time, filename = "model_testing/plots/model_comparison_time_screen.pdf", width =12.5) 
+
+
+```
+###Confusion matrix
+It will be interesting to generate a confusion matrix using the labels assigned by the classifier of the screen of interest as ground truth and the predicitions made by the other algorithm as predicitions. By doing that we could see better how do the models differn when it comes to classifying cells into groups.
+```{r}
+
+conf_data_time <- table(subsample_time_screen$group, subsample_time_screen$cross_group) %>% as.data.frame() %>% group_by(Var1) %>% 
+                    mutate(prop_cells = Freq/sum(Freq)) %>% ungroup() %>% 
+                    mutate(Var2 = factor(Var2, levels = c("Normal", "Mitosis", "Elongated", "Condensed", "Big"))) 
+
+
+conf_plot_time <- ggplot(conf_data_time, aes(x = Var1, y = Var2, fill = prop_cells))+
+                                 geom_tile()+
+                                 scale_x_discrete(expand = c(0,0))+
+                                 scale_y_discrete(expand = c(0,0))+
+                                 scale_fill_gradient(low = "white", high = "#4885ed")+
+                                 xlab("Time-resolved prediction")+
+                                 ylab("Syngene prediction")+
+                                 ggtitle("Confusion matrix time-resolved screen")+
+                                 confusion_matrix_theme()+
+                                 geom_label(data = conf_data_time %>% filter(prop_cells>0.1), 
+                                            aes(x = Var1, y = Var2, label = round(prop_cells, 2)), size = 6, label.size = 0.5)
+
+#The main source of error is that Big cells are labelled as mitotic or that condensed cells are labelled as Normal cells. 
+       
+
+ggsave(conf_plot_time, filename = "model_testing/plots/conf_matrix_time_screen.pdf", height = 7, width = 10)
+
+```
+
+##Syngene screen
+```{r}
+
+#Syngene screen 
+
+#I need to change the label of mitotic cells to irregular nucleus. 
+
+subsample_syngene_iso <- subsample_syngene_iso %>% mutate(cross_group = predict(isolated_classifier_time, subsample_syngene_iso)) %>% 
+                            mutate(cross_group = if_else(cross_group == "Mitosis", "Irregular_nucleus", as.character(cross_group)),
+                               match_group = if_else(group == cross_group, "Match", "No match"))
+
+count(subsample_syngene_iso, "match_group")
+
+#There is a match in the predictions for 82 % of the cells. 
+
+stacked_syngene_data <- subsample_syngene_iso %>% mutate(average = "average") %>% group_by(group, match_group) %>% tally() %>% 
+                      ungroup() %>% group_by(group) %>% mutate(prop_cells = n/sum(n)) %>% ungroup() %>% 
+                      mutate(group = factor(group), match_group = factor(match_group)) 
+
+#I will add the average values
+
+avg_values_syn <- stacked_syngene_data %>% group_by(match_group) %>% tally(n) %>% mutate(group = "Average") %>% select(group, everything()) %>% 
+                    mutate(prop_cells = n/sum(n))
+
+stacked_syngene_data <- stacked_syngene_data %>% rbind(avg_values_syn) %>% 
+                          mutate(group = factor(group, levels = c("Average", "Big", "Condensed", "Elongated", "Irregular_nucleus", "Normal")),
+                             match_group = factor(match_group, levels = c("No match", "Match")))
+
+#In the stacked bar plots I will show the average agreement between model predictions but also the the cross-comparison across groups. 
+
+#Model matching
+
+stacked_cross_comparison_syn <- ggplot(stacked_syngene_data, aes(x = group, y = prop_cells,  fill = match_group, label = round(prop_cells, 2)))+
+                              geom_bar(stat = "identity", position = "stack")+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19),
+                                    axis.ticks.x = element_blank())+
+                              guides(fill = guide_legend(nrow = 1, override.aes = list(size = 3), title.position = "top", title.hjust = 0.5, reverse = T))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1.01))+
+                              scale_x_discrete(labels = c("Average","Big", "Condensed", "Elongated", "Irregular\nnucleus", "Normal"))+
+                              scale_fill_manual(values = c(amazon_orange, amazon_blue))+
+                              labs(fill = "Model comparison")+
+                              ylab("Proportion of cells")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+#Almost all irregular nucleus cells are missclassified. It seems that the time-resolved model assigns less irregulat nucleus labels and many more Normal ones. That is why almost all normal cells are well-matched by the model but not the irregular nucleus ones. 
+
+stacked_syn_data_groups <- subsample_syngene_iso %>% pivot_longer(cols = c(group, cross_group)) %>% 
+                              select(name, value) %>% group_by(name, value) %>% tally() %>% dplyr::rename(screen = name, group = value) %>% ungroup() %>%
+                              group_by(screen) %>% mutate(prop_cells = n/sum(n)) %>% ungroup() %>% 
+                              mutate(screen = if_else(screen == "group", "syngene", "time-resolved"),
+                                     group = factor(group, levels = c("Irregular_nucleus", "Elongated", "Condensed", "Big", "Normal"))) 
+                              
+
+
+#Group proportions         
+
+stacked_prop_syngene <- ggplot(stacked_syn_data_groups, aes(x = screen, y = prop_cells, 
+                                                          fill = group,
+                                                          label = round(prop_cells, 2)))+
+                              geom_bar(stat = "identity", position = "stack", width = 0.75)+
+                              bar_plot_theme()+
+                              theme(legend.title = element_blank(), 
+                                    axis.text.y = element_blank(),
+                                    axis.title.y = element_blank(),
+                                    axis.ticks.y = element_blank(),
+                                    axis.line.y = element_blank(),
+                                    axis.ticks.x = element_blank(),
+                                    legend.position = "bottom")+
+                              guides(fill = guide_legend(override.aes = list(size = 5), title.hjust = 0.5, nrow = 3))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1))+
+                              scale_fill_manual(values = c(google_red, google_yellow, lacoste_green, google_green, google_blue),
+                                                labels = c("Irregular nucleus", "Elongated", "Condensed", "Big", "Normal"))+
+                              labs(fill = "Group")+
+                              geom_text(data = stacked_syn_data_groups %>% filter(prop_cells >= 0.05),size = 8, 
+                                        position = position_stack(vjust = 0.5), colour = "white")
+
+#The syngene model labels more cells many more cells as mitotic. 
+
+arranged_stack_syngene <- stacked_cross_comparison_syn + stacked_prop_syngene + 
+                          plot_annotation(title = "Syngene screen", theme = theme(plot.title = element_text(size = 26, hjust = 0.5)))+
+                            plot_layout(widths = c(2.5,1))
+                             
+ggsave(arranged_stack_syngene, filename = "model_testing/plots/model_comparison_syngene_screen.pdf", width =12.5) 
+
+```
+###Confusion matrix
+It will be interesting to generate a confusion matrix using the labels assigned by the classifier of the screen of interest as ground truth and the predicitions made by the other algorithm as predicitions. By doing that we could see better how do the models differn when it comes to classifying cells into groups.
+```{r}
+
+conf_data_syn <- table(subsample_syngene_iso$group, subsample_syngene_iso$cross_group) %>% as.data.frame() %>% group_by(Var1) %>% 
+                    mutate(prop_cells = Freq/sum(Freq)) %>% ungroup() %>% 
+                    mutate(Var2 = factor(Var2, levels = c("Normal", "Irregular_nucleus", "Elongated", "Condensed", "Big"))) 
+
+
+conf_plot_syn <- ggplot(conf_data_syn, aes(x = Var1, y = Var2, fill = prop_cells))+
+                                 geom_tile()+
+                                 scale_x_discrete(expand = c(0,0), labels = c("Big", "Condensed", "Elongated", "Irregular\nnucleus", "Normal"))+
+                                 scale_y_discrete(expand = c(0,0), labels = c("Normal", "Irregular\nnucleus", "Elongated", "Condensed", "Big"))+
+                                 scale_fill_gradient(low = "white", high = "#4885ed")+
+                                 xlab("Syngene prediction")+
+                                 ylab("Time-resolved prediction")+
+                                 ggtitle("Confusion matrix syngene screen")+
+                                 confusion_matrix_theme()+
+                                 geom_label(data = conf_data_syn %>% filter(prop_cells>0.1), 
+                                            aes(x = Var1, y = Var2, label = round(prop_cells, 2)), size = 6, label.size = 0.5)
+
+#Irregular nucleus are labelled mostly as normal or Big. Similarly some Big or Condensed cells are also assigned to the Normal class. 
+       
+
+ggsave(conf_plot_syn, filename = "model_testing/plots/conf_matrix_syngene_screen.pdf", height = 7, width = 10)
+
+```

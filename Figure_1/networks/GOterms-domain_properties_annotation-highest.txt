@@ -1,0 +1,48 @@
+Domain number	Domain name	RGB
+2	<NA>	0	255	206
+3	complex activity ATP-dependent DNA helicase	0	255	239
+4	initiation factor translation 3 activity	255	0	163
+5	regulation response defense positive virus	87	0	255
+6	CCR4-NOT complex mRNA activity catabolic	0	255	141
+7	protein binding chaperonin-containing folding T-complex	250	0	255
+8	rRNA (SSU-rRNA, 5.8S large LSU-rRNA)	255	0	130
+9	mitochondrial ATP proton-transporting ribosomal subunit	87	255	0
+10	ribosomal subunit cytosolic ribosome assembly	54	0	255
+11	transport axonal centrosome complex kinetochore	217	0	255
+12	complex ATP-dependent brahma cell chromatin	0	255	174
+13	at cascade cell commitment disc-derived	255	0	228
+14	regulation negative signaling growth homeostasis	255	0	33
+15	mRNA RNA sex splicing, alternative	255	228	0
+16	complex snRNP spliceosomal spliceosome U5	0	255	76
+17	proteasome complex activity catabolic core	217	255	0
+18	DNA binding chromatin negative regulation	184	255	0
+19	nucleosome activity assembly binding DNA-templated	255	0	195
+20	complex factor transcription activity II	0	255	109
+21	mitotic cell protein cycle transition	0	206	255
+22	cell chromosome complex cycle endomitotic	255	195	0
+23	nuclear nucleosome	0	174	255
+24	morphogenesis disc hemopoiesis hindgut immune	0	43	255
+25	complex acid amino cellular EGO	152	255	0
+26	cell germ-line protein COP9 cyst	0	239	255
+27	cell regulation positive proton-transporting actin	255	0	65
+28	polymerase RNA transcription II activity	152	0	255
+29	binding ATP cytoplasm cytosol membrane	255	0	0
+30	transport protein activity Golgi adaptor	0	76	255
+31	Golgi transport vesicle-mediated complex ER	22	255	0
+32	regulation coat COPI diameter, gland	250	255	0
+33	activity histone methyltransferase	0	11	255
+34	catabolic nuclear (RNase 3'-end complex)	184	0	255
+35	anaphase-promoting activity catabolic complex complex-dependent	119	255	0
+36	activating enzyme positive regulation activity	0	109	255
+37	complex active binding Cdc73/Paf1 chromatin	0	255	43
+38	transcription complex DNA-templated elongation factor	255	0	98
+39	import nucleus protein	255	65	0
+40	nuclear pore constituent organization structural	255	98	0
+41	nuclear binding envelope export localization	255	33	0
+42	processing snRNA 3'-end complex integrator	54	255	0
+43	histone activity complex deacetylase deacetylation	119	0	255
+44	circadian behavior regulation rhythm	255	163	0
+45	cleavage mRNA polyadenylation complex factor	0	141	255
+46	central channel nuclear pore transport	255	130	0
+47	complex NSL	22	0	255
+48	chromosome cohesin complex organization	0	255	11

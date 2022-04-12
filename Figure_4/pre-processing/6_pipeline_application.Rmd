@@ -1,0 +1,875 @@
+---
+title: "pipeline_application"
+author: "Sergi"
+date: "1/29/2020"
+output: pdf_document
+abstract: In the projects saved in folder 3.3 I developed machine learning algorithms to stratify cells into groups based on their image profile and the local cell crowding. 
+editor_options: 
+  chunk_output_type: console
+---
+#Package loading
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(cluster)
+library(factoextra)
+library(randomForest)
+library(EBImage)
+library(e1071)
+library(jsonlite)
+library(kernlab)
+library(RSQLite)
+library(rlist)
+library(pryr)
+library(LMGene)
+library(dtplyr)
+library(data.table)
+library(doParallel)
+library(foreach)
+library(RPostgres)
+library(rstudioapi)
+```
+#Object loading
+```{r}
+
+query_genes <- readRDS("objects/query_genes.rds") %>% separate(plate_barcode, into = c("barcode", "screen"))
+
+target_genes <- readRDS("objects/target_genes.rds")
+
+load("objects/numeric_features.RData")
+
+#Complete list of scale factors. The missing screens are: S003, S005, S127, S128, S184, S194, S195 and S196 all of which hava false qc_general and therefore will not be used in the analysis. 
+
+#S230, S228, S225 and S182 also do not have data. 
+
+load("objects/scale_factors.rdata")
+
+test <- read_csv(file = "/Volumes/EXTHD0363/S228_CTRL2.zip", col_names = T, col_types = cols(plate = col_character()))
+
+#Data normalisation function 
+
+data_normalization <- function(value, median, mad){
+  
+  return((glog(value, lambda = 1)-median)/mad)
+  
+}
+
+#Segmentation classifier
+
+filtering_classifier <- readRDS("objects/filtering_classifier.rds")
+
+#Cell density classifier
+
+density_classifier <- readRDS("objects/density_classifier.rds")
+
+#Isolated group classifier
+
+isolated_classifier <- readRDS("objects/isolated_state_classifier.rds")
+
+#Crowded group classifier
+
+crowded_classifier <- readRDS("objects/crowded_state_classifier.rds")
+
+#The R unzip funtion truncates files bigger than 4Gb. By using system2 function one can avoid this. 
+
+decompress_file <- function(directory, file, .file_cache = FALSE) {
+
+    if (.file_cache == TRUE) {
+       print("decompression skipped")
+    } else {
+
+      # Run decompression
+      decompression <-
+        system2("unzip",
+                args = c("-o", # include override flag
+                         file),
+                stdout = TRUE)
+
+
+      # Test for success criteria
+      # change the search depending on 
+      # your implementation
+      if (grepl("Warning message", tail(decompression, 1))) {
+        print(decompression)
+      }
+    }
+}    
+
+```
+#Time testing
+I will try to optimise every single step of the pipeline. 
+##Loading data
+The data is stored in zip files. If the csv file is smaller than 4GB, which is the case for most plates from S065 to S0232 then read_csv automatically decompress it a reads it. If the table is bigger then I will need to unzip using unzip() which creates a csv file and then reading it. 
+```{r}
+
+#S140 plate 1005 is one of the plates which comes from the database but the zip file is big, it weights 1.6 Gb. 
+
+test <- read_csv("/Volumes/EXTHD0362/S140_1005.zip", col_names = T, col_types = cols(screen = col_factor(),
+                                                                                     plate = col_factor(),
+                                                                                     well = col_factor(),
+                                                                                     field = col_factor())) %>% 
+          filter(DNA.m.cx>100 & DNA.m.cx<1948, DNA.m.cy>100 & DNA.m.cy<1948)
+
+#It took around 2 minutes to decompress and a bit more than 2.5 minutes to load the csv file. So in total 4.5 minutes. 
+
+unzip("/Volumes/EXTHD0362/S140_1005.zip")
+
+decompress_file("./", "/Volumes/EXTHD0362/S140_1005.zip")
+
+#This function is around 10 seconds faster. 
+
+#Extracting the file took only 1 minute, so it might be worth using unzip and then reading the csv file. 
+
+test <- read_csv("objects/S140_1005.csv", col_names = T, col_types = cols(screen = col_factor(),
+                                                                                     plate = col_factor(),
+                                                                                     well = col_factor(),
+                                                                                     field = col_factor())) %>% 
+          filter(DNA.m.cx>100 & DNA.m.cx<1948, DNA.m.cy>100 & DNA.m.cy<1948)
+
+#In total it will take 3 minutes, which is very acceptable as most of the plates are smaller in size. 
+
+#S001 to S064 the csv are much larger since they were not copied in the postgres database.I will use the decompress file function
+
+
+
+decompress_file("./", "/Volumes/EXTHD0362/S012_1005.zip")
+
+#It took 1.5 min to decompress the file. 
+
+
+#list.files witht the recursive option looks for the file in the specific
+
+test <- read_csv(paste0("./", list.files("./", pattern = ".csv", recursive = T)), col_names = T, col_types = cols(screen = col_factor(),
+                                                                                     plate = col_factor(),
+                                                                                     well = col_factor(),
+                                                                                     field = col_factor())) %>% 
+          filter(DNA.m.cx>100 & DNA.m.cx<1948, DNA.m.cy>100 & DNA.m.cy<1948)
+
+#It takes 3 minutes for a 6 Gb file... There are many which have this size. 
+
+#By doing this I can delete the folders and the csv file just created.
+
+unlink("Volumes/", recursive = T)
+
+#So basically for plates that were in the database it will take around 3 minutes to load, while for S001 to S064 from 4 to 5 minutes.
+
+
+#######################################################################################################################################################
+
+#Reading a csv file in chunks. 
+
+#The problem that might happen is that when parallelising the process the RAM collapses. It might be recommendable then loading chunks of the csv file instead of all of it in each process. 
+
+#This is one of the biggest csv files. It is almost 7 Gb. I want to see how many cells are there and how much RAM does the table takes up 
+
+test <- read_csv("./Volumes/EXTHD0360/syngene_screen/raw_data/S040/S040_1004.csv", col_names = T, col_types = cols(screen = col_factor(),
+                                                                                     plate = col_factor(),
+                                                                                     well = col_factor(),
+                                                                                     field = col_factor())) %>% 
+          filter(DNA.m.cx>100 & DNA.m.cx<1948, DNA.m.cy>100 & DNA.m.cy<1948)
+
+#It's only 4.3 million cells. This takes up 6.27 Gb of RAM. So maybe loading chunks of 1M cells will be a good idea. It takes like 3 minutes to load
+
+test <- fread("S140_1005.csv", data.table = F, 
+              drop = c("actin.m.cx", "actin.m.cy", "dark", "fussel", "weak_tubulin")) %>% 
+          filter(DNA.m.cx>100 & DNA.m.cx<1948, DNA.m.cy>100 & DNA.m.cy<1948)
+
+rm(test)
+
+#Using fread is 5x faster than read_csv. Furthermore I will eliminate the actin coordinates as well as the dark, fussel and weak tubulin columns. 
+#This file took 45 seconds to load.
+
+#The object size of such a column is less than 3 Gb therefore, we could potentially parallelise it to 5 threats. 
+
+```
+##Classification
+The bottleneck of the pipeline is the steps in which the classifiers have to predict the label of the cells. This is independently of whether the random forest was generated using caret, randomForest or the ranger package. 
+```{r}
+
+#Load a plate. 
+
+test_plate <- fread("S040_1004.csv", data.table = F, drop = c("actin.m.cx", "actin.m.cy", "dark", "fussel", "weak_tubulin"), verbose = T) %>% 
+                filter(DNA.m.cx>100 & DNA.m.cx<1948, DNA.m.cy>100 & DNA.m.cy<1948)
+
+#I do not why but it took 7 minutes and almost crashed the RAM just before loading it. 
+
+screen_name <- test_plate$screen[1]
+
+  for (feature in numeric_features){
+    
+    if(list_mads[[screen_name]][[feature]] != 0){
+      
+      test_plate[feature] <- data_normalization(test_plate[[feature]], list_medians[[screen_name]][[feature]], list_mads[[screen_name]][[feature]])
+      
+    }else{test_plate[feature] <- glog(test_plate[[feature]], lambda = 1)}
+    
+  }
+
+#It takes around 15 seconds
+
+#I will try some operations in smaller set
+
+test_subsample <- test_plate %>% slice(1:10000)
+
+test_subsample <- test_subsample %>% filter(predict(filtering_classifier, newdata = test_subsample) == "Yes")
+
+test_subsample["context1"] <- fct_c(predict(density_classifier, newdata = test_subsample %>% slice(1:(nrow(test_subsample)/2))),
+                                     predict(density_classifier, newdata = test_subsample %>% slice((nrow(test_subsample)/2+1:nrow(test_subsample)))))
+
+
+#This works. 
+
+#REAL PLATE
+
+
+test_plate["context"] <- fct_c(predict(density_classifier, newdata = test_plate %>% slice(1:(nrow(test_plate)/2))),
+                               predict(density_classifier, newdata = test_plate %>% slice((nrow(test_plate)/2+1:nrow(test_plate)))))
+
+#It takes 3 min and 35 sec
+
+test_plate <- test_plate %>% arrange(desc(context))
+
+#It takes 5-10 seconds
+
+test_plate["group"] <- fct_c(predict(isolated_classifier, test_plate %>% filter(context == "Isolated")),
+                             predict(crowded_classifier, test_plate %>% filter(context == "Crowded")))
+
+#It takes 4 minutes but stresses the RAM quite much. 
+
+test_plate_labels <- test_plate %>% select(screen, plate, well, field, DNA.m.cx, DNA.m.cy,context, group) %>% 
+                        mutate(DNA.m.cx = round(DNA.m.cx, 3), DNA.m.cy = round(DNA.m.cy, 3)) %>% 
+                        unite(cell_id, screen, plate, well, field, DNA.m.cx, DNA.m.cy, sep = "_") %>% unite(label, context, group, sep = "_") %>% 
+                        mutate(label = factor(label))
+
+#It takes 10 seconds. This could be the format of the group labelling table. I need both x and y coordinates. 
+
+group_counts <- 
+
+aggregated_data <- test_plate %>% group_by(screen, plate, well, context, group) %>% select(-DNA.m.cx, -DNA.m.cy) %>% 
+                      summarise_at(.vars = numeric_features, median) %>% 
+                      left_join(test_plate %>% group_by(screen, plate, well, context, group) %>% tally() %>% dplyr::rename(ncells = n)) %>% 
+                      select(screen, plate, well, context, group, ncells, everything()) %>% ungroup() %>% mutate(screen= factor(screen),
+                                                                                                                 plate = factor(plate),
+                                                                                                                 well = factor (well))
+
+#It takes 20 seconds. 
+
+#The final table will have 28 million rows. 
+
+cell_labels <- test_plate_labels
+
+#####################################################################################################################################
+
+#CELL ID test
+
+#I want to make sure that I can from the cell_id assing the labels to the correct cells with left_join.
+
+cell_labels_test <- cell_labels %>% separate(cell_id, into = c("screen", "plate", "well", "field", "DNA.m.cx", "DNA.m.cy"), sep = "_") %>% 
+                      mutate(plate = as.numeric(plate), field = as.numeric(field), DNA.m.cx = as.double(DNA.m.cx), DNA.m.cy = as.double(DNA.m.cy))
+                      
+
+test <- test_plate %>% sample_n(10000) %>% select(-label) %>% mutate(DNA.m.cx = round(DNA.m.cx, 3), DNA.m.cy = round(DNA.m.cy, 3)) %>%
+          left_join(cell_labels_test)
+
+#It has left join it also by DNA.m.cx and DNA.m.cy
+
+test <- test %>% mutate(label2= paste0(context, "_", group))
+
+which(as.character(test$label) != test$label2)
+
+#The labels can be matched to the coordinates as long as they are round to three floats. 
+
+#I will save to examples of the cell_labels and the aggregated_data tables so that Florian can create the tables in the postgres database. 
+
+save(aggregated_data, cell_labels, file = "example_tables.RData")
+
+```
+##Paralelisation by well
+Based on the time it is required to do the predictions the best strategy might be to load a plate and then paralelise the classification predictions by well. 
+This will not swap the memory RAM, and the computations will hopefully be much faster. 
+```{r}
+
+#I will only load the plate, filter cells at the edges and process the features.All other steps will be done by well. 
+
+test_plate <- fread("S040_1004.csv", data.table = F, drop = c("actin.m.cx", "actin.m.cy", "dark", "fussel", "weak_tubulin"), verbose = T,
+                    nthread = 3) %>% filter(DNA.m.cx>100 & DNA.m.cx<1948, DNA.m.cy>100 & DNA.m.cy<1948)
+
+
+#I do not why but it took 7 minutes and almost crashed the RAM just before loading it. 
+
+screen_name <- test_plate$screen[1]
+
+  for (feature in numeric_features){
+    
+    if(list_mads[[screen_name]][[feature]] != 0){
+      
+      test_plate[feature] <- data_normalization(test_plate[[feature]], list_medians[[screen_name]][[feature]], list_mads[[screen_name]][[feature]])
+      
+    }else{test_plate[feature] <- glog(test_plate[[feature]], lambda = 1)}
+    
+  }
+
+#We have to see how many cores the computer has. 
+
+detectCores()
+
+#There are 8 cores, therefore we can use 6 for instance for the computation. 
+
+#By doing this we set the number of cores to be used in the cluster
+
+cluster <- makeCluster(3, type = "FORK")
+
+#Register the cluster in the doParallel package
+
+registerDoParallel(cluster)
+
+#Every task has to be in a function. I will write things to a csv but in the real pipeline we will connect at every iteration to the postgres database and 
+#then copy it. 
+
+#csv with column names
+
+write_csv(group_counts %>% slice(1), col_names = T, path = "objects_pipeline/aggregated_data_example.csv")
+
+write_csv(cell_label %>% slice(1), col_names = T, path = "objects_pipeline/cell_labels_example.csv")
+
+#In the function, the dataframe is the plate data and the well is the selected well at each iteration. 
+
+cell_classification_loop <- function(dataframe){
+  
+  for(well_name in unique(dataframe$well)[1:30]){
+    
+    data <- dataframe %>% filter(well == well_name)
+    
+    #Eliminate wrongly segmented cells.
+    
+    data <- data %>% filter(predict(filtering_classifier, data) == "Yes")
+    
+    #Density classification
+    
+    data["context"] <- predict(density_classifier, data)
+    
+    #Group classification. 
+    
+    data <- data %>% arrange(desc(context))
+    
+    data["group"] <- fct_c(predict(isolated_classifier, data %>% filter(context == "Isolated")),
+                           predict(crowded_classifier, data %>% filter(context == "Crowded")))
+    
+    #Aggregate the data by well and group
+    
+    
+    agg_data <- data %>% group_by(screen, plate, well, context, group) %>% select(-DNA.m.cx, -DNA.m.cy) %>% 
+                        summarise_at(.vars = numeric_features, median) %>% 
+                        left_join(data %>% group_by(screen, plate, well, context, group) %>% tally() %>% dplyr::rename(ncells = n)) %>% 
+                        select(screen, plate, well, context, group, ncells, everything()) %>% ungroup() %>% mutate(screen= factor(screen),
+                                                                                                                   plate = factor(plate),
+                                                                                                                   well = factor (well))
+  
+    write_csv(agg_data, col_names = F, append = T, path = "objects_pipeline/aggregated_data_example.csv")
+    
+    
+    
+    cell_label <- data %>% select(screen, plate, well, field, DNA.m.cx, DNA.m.cy,context, group) %>% 
+                            mutate(DNA.m.cx = round(DNA.m.cx, 3), DNA.m.cy = round(DNA.m.cy, 3)) %>% 
+                            unite(cell_id, screen, plate, well, field, DNA.m.cx, DNA.m.cy, sep = "_") %>% unite(label, context, group, sep = "_") %>% 
+                            mutate(label = factor(label))
+    
+     write_csv(cell_label, col_names = F, append = T, path = "objects_pipeline/cell_labels_example.csv")
+     
+     print(paste0(well_name, " completed"))
+     
+  }
+}
+
+  
+cell_classification(test_list, "A1")
+
+#It takes less than 5 seconds. 
+
+#I will compare how long it takes with and without paralelising
+
+cell_classification(test_plate)
+
+
+#This takes 40 seconds and does not clock the RAM. 
+
+
+list_wells <- sort(unique(test_plate$well))
+
+foreach(well_name = list_wells[1:30], .packages = c("tidyverse", "kernlab", "readr")) %dopar% {
+  
+  cell_classification(test_plate, well_name)
+  
+}
+
+#This doesn't work because it loads the big plate in every new session therefore clocks the RAM and it takes ages to open all of them. 
+
+
+
+for(well_name in list_wells[1:50]){
+  
+  cell_classification(test_list, well_name)
+  
+}
+
+#This takes 1 min and 40sec. 
+
+
+#In the end we decided to store screen, plate, well, field, and coordinates as separated columns in the cell labels table so that we can index it and 
+#retrieve it easily. 
+
+cell_classification <- function(dataframe, well_name){
+  
+    database <- src_postgres(
+                  dbname = "incell2000_test",
+                  host = "b110-sc2sn01",
+                  user = "florianH",
+                  password = "x!Kl9R_p7XZYjLhg")
+
+    
+    data <- dataframe[[well_name]]
+    
+    #Eliminate wrongly segmented cells.
+    
+    data <- data %>% filter(predict(filtering_classifier, data) == "Yes")
+
+    #Density classification
+
+    data["context"] <- predict(density_classifier, data)
+
+    #Group classification.
+
+    data <- data %>% arrange(desc(context))
+    
+    #It can happen that for a specific well all cells fall into crowded and isolated.
+    
+    if(length(unique(data$context)) == 2){
+      
+       data["group"] <- fct_c(predict(isolated_classifier, data %>% filter(context == "Isolated")),
+                              predict(crowded_classifier, data %>% filter(context == "Crowded")))
+      
+    }else if(unique(data$context) == "Isolated"){
+      
+      data["group"] <- fct_c(predict(isolated_classifier, data))
+      
+    }else if(unique(data$context) == "Crowded"){
+      
+      data["group"] <- fct_c(predict(crowded_classifier, data))
+      
+    }
+
+    #Aggregate the data by well and group
+
+
+    agg_data <- data %>% group_by(screen, plate, well, context, group) %>% select(-DNA.m.cx, -DNA.m.cy) %>%
+                        summarise_at(.vars = numeric_features, median) %>%
+                        left_join(data %>% group_by(screen, plate, well, context, group) %>% tally() %>% dplyr::rename(n_cells = n)) %>%
+                        select(screen, plate, well, context, group, n_cells, everything()) %>% ungroup() 
+    
+    
+    db_insert_into(database$con, table = "D1086_syngene_classified_cells_agg", values = agg_data)
+
+
+    cell_label <- data %>% select(screen, plate, well, field, DNA.m.cx, DNA.m.cy,context, group) %>%
+                            unite(label, context, group, sep = "_") 
+    
+    db_insert_into(database$con, table = "D1086_syngene_classified_cells_sc", values = cell_label)
+    
+    print(paste0(well_name, " completed"))
+     
+}
+
+#These objects give the format of the tables in the database. 
+
+load("database_files/example_sc_label_data.RData")
+
+
+mclapply(1:384,function(i){
+  
+  cell_classification(test_list, list_wells[i])
+  
+}, mc.cores = 7, mc.preschedule = F, mc.cleanup = T)
+
+#By adding mc.preschedule = F the new r sessions do not take any RAM almost. 
+
+#Computing a plate takes 3 min and 47 seconds.
+
+test_plate <- do.call("rbind",test_list)
+
+#Copy to the postgres database
+
+db_insert_into(database$con, table = "D1086_syngene_classified_cells_agg", values = agg_data)
+
+db_insert_into(database$con, table = "D1086_syngene_classified_cells_sc", values = cell_label)
+
+#It works to connect to the database inside of the function. 
+
+cell_classification(test_plate, "A1")
+
+#There's no problem connecting to the database in multiple processes. 
+
+mclapply(1:384,function(i){
+  
+  cell_classification(test_plate, list_wells[i])
+  
+}, mc.cores = 7, mc.preschedule = F, mc.cleanup = T)
+
+#It took 4 min adn 25 seconds to compute a plate. 
+
+#Perhaps is faster if I split the table into items of a list by plate using split. 
+
+test_plate <- split(test_plate, f = test_plate$well)
+
+#It takes less than 10 seconds. 
+
+mclapply(1:384,function(i){
+  
+  cell_classification(test_plate, list_wells[i])
+  
+}, mc.cores = 7, mc.preschedule = F, mc.cleanup = T)
+
+#If items are in a list then it takes 3 min and 45 seconds, which basically means saving 30 seconds. 
+
+
+```
+##Plate test
+The optimal solution is to unzip a file using a system call, then read the csv using fread and filtering the cells at the edges. Then before loading, I will split the table into a list using the well values as parameters. Then I will iterate through the wells to predict the labels of the cells and save the aggregated data as well as the single cell labels. This latter process will be parallelised to 7 cores. 
+Before running the complete screen I'd like to run one plate completely to see that the process. I will pick a plate whose zip file is one of the biggest. 
+###Large plate
+```{r}
+
+decompress_file("./test_data/", "/Volumes/EXTHD0362/S012_1005.zip")
+
+#It took 1 minute
+
+test_plate <- fread(paste0("./Volumes/", list.files("./Volumes/", pattern = ".csv", recursive = T)), data.table = F, 
+                    drop = c("actin.m.cx", "actin.m.cy", "dark", "fussel", "weak_tubulin"), verbose = T, nThread = 6) %>% 
+                    filter(DNA.m.cx>100 & DNA.m.cx<1948, DNA.m.cy>100 & DNA.m.cy<1948)
+
+
+
+#It takes 20-30 seconds
+
+screen_name <- test_plate$screen[1]
+
+  for (feature in numeric_features){
+    
+    if(list_mads[[screen_name]][[feature]] != 0){
+      
+      test_plate[feature] <- data_normalization(test_plate[[feature]], list_medians[[screen_name]][[feature]], list_mads[[screen_name]][[feature]])
+      
+    }else{test_plate[feature] <- glog(test_plate[[feature]], lambda = 1)}
+    
+  }
+
+
+test_plate <- split(test_plate, f = test_plate$well)
+
+#It takes 5 seconds. 
+
+mclapply(1:384,function(i){
+  
+  cell_classification(test_plate, list_wells[i])
+  
+}, mc.cores = 7, mc.preschedule = F, mc.cleanup = T)
+
+
+#It took 6 minutes which is longer than expected. However for three wells there was an error saying that newdata has 0 rows. 
+
+    database <- src_postgres(
+                  dbname = "incell2000_test",
+                  host = "b110-sc2sn01",
+                  user = "florianH",
+                  password = "x!Kl9R_p7XZYjLhg")
+
+
+
+
+```
+###Database plate
+I will run locally the code on the database files which are smaller and can be read much faster. I want to test how much time takes to process one of such plates. 
+```{r}
+
+#The wells have a 0 in the middle 
+
+list_wells_database <- vector()
+
+for(well in list_wells){
+  
+  if(nchar(well) == 2){
+    
+    list_wells_database <- c(list_wells_database, paste0(str_split(well, "")[[1]][1], "0", str_split(well, "")[[1]][2]))
+    
+  }else{list_wells_database <- c(list_wells_database, well)}
+  
+}
+
+decompress_file("./test_data/", "/Volumes/EXTHD0362/S182_1012.zip")
+
+#I chose one of the heaviest zip files. It took 40 seconds
+
+#It took 1 minute
+
+test_plate <- fread("S182_1012.csv", data.table = F, 
+                    drop = c("actin.m.cx", "actin.m.cy", "dark", "fussel", "weak_tubulin"), verbose = T, nThread = 6) %>% 
+                    filter(DNA.m.cx>100 & DNA.m.cx<1948, DNA.m.cy>100 & DNA.m.cy<1948)
+
+#It took 30 seconds.
+
+screen_name <- test_plate$screen[1]
+
+  for (feature in numeric_features){
+    
+    if(list_mads[[screen_name]][[feature]] != 0){
+      
+      test_plate[feature] <- data_normalization(test_plate[[feature]], list_medians[[screen_name]][[feature]], list_mads[[screen_name]][[feature]])
+      
+    }else{test_plate[feature] <- glog(test_plate[[feature]], lambda = 1)}
+    
+  }
+
+#It takes a few more seconds
+
+
+test_plate <- split(test_plate, f = test_plate$well)
+
+#It takes 5 seconds. 
+
+mclapply(1:384,function(i){
+  
+  cell_classification(test_plate, list_wells_database[i])
+  
+}, mc.cores = 7, mc.preschedule = F, mc.cleanup = T)
+
+#It took 3 min and 40 sec. 
+
+
+#So in total it takes around 5-6 min. 
+
+```
+#Classification function
+Here I will put the final classification function that I will use with mclapply
+```{r}
+
+cell_classification <- function(dataframe, well_name){
+  
+    database <- src_postgres(
+                  dbname = "incell2000_test",
+                  host = "b110-sc2sn01",
+                  user = "florianH",
+                  password = "x!Kl9R_p7XZYjLhg")
+
+    
+    data <- dataframe[[well_name]]
+    
+    #Eliminate wrongly segmented cells.
+    
+    data <- data %>% filter(predict(filtering_classifier, data) == "Yes")
+
+    #Density classification
+
+    data["context"] <- predict(density_classifier, data)
+
+    #Group classification.
+
+    data <- data %>% arrange(desc(context))
+    
+    #It can happen that for a specific well all cells fall into crowded and isolated.
+    
+    if(length(unique(data$context)) == 2){
+      
+       data["group"] <- fct_c(predict(isolated_classifier, data %>% filter(context == "Isolated")),
+                              predict(crowded_classifier, data %>% filter(context == "Crowded")))
+      
+    }else if(unique(data$context) == "Isolated"){
+      
+      data["group"] <- fct_c(predict(isolated_classifier, data))
+      
+    }else if(unique(data$context) == "Crowded"){
+      
+      data["group"] <- fct_c(predict(crowded_classifier, data))
+      
+    }
+    
+    #Make well names longer so that they match the database notation. 
+    
+
+    #Aggregate the data by well and group
+
+
+    agg_data <- data %>% group_by(screen, plate, well, context, group) %>% select(-DNA.m.cx, -DNA.m.cy) %>%
+                        summarise_at(.vars = numeric_features, median) %>%
+                        left_join(data %>% group_by(screen, plate, well, context, group) %>% tally() %>% dplyr::rename(n_cells = n)) %>%
+                        select(screen, plate, well, context, group, n_cells, everything()) %>% ungroup() 
+
+
+    cell_label <- data %>% select(screen, plate, well, field, DNA.m.cx, DNA.m.cy,context, group) %>%
+                            unite(label, context, group, sep = "_") 
+    
+    if(nchar(well_name) == "2"){
+      
+      agg_data <- agg_data %>% mutate(well = rep(paste0(str_split(well_name, "")[[1]][1], "0", str_split(well_name, "")[[1]][2])))
+      
+      cell_label <- cell_label %>% mutate(well = rep(paste0(str_split(well_name, "")[[1]][1], "0", str_split(well_name, "")[[1]][2])))
+      
+    }
+    
+    #Correct the control plate name so that it has 4 characters and can be copied to the database. 
+    
+    if(nchar(agg_data$plate[1]) == 5 & substr(agg_data$plate[1], 5,  5) == "1"){
+      
+      agg_data <- agg_data %>% mutate(plate = rep("CTR1"))
+      
+      cell_label <- cell_label %>% mutate(plate = rep("CTR1"))
+      
+    }
+    
+    if(nchar(agg_data$plate[1]) == 5 & substr(agg_data$plate[1], 5,  5) == "2"){
+      
+      agg_data <- agg_data %>% mutate(plate = rep("CTR2"))
+      
+      cell_label <- cell_label %>% mutate(plate = rep("CTR2"))
+      
+    }
+    
+    db_insert_into(database$con, table = "D1086_syngene_classified_cells_agg", values = agg_data)
+    
+    db_insert_into(database$con, table = "D1086_syngene_classified_cells_sc", values = cell_label)
+    
+    print(paste0(well_name, " completed"))
+    
+    #return(agg_data)
+     
+}
+
+
+```
+#Pipeline application
+##Database plates
+I will only run in a local computer screens which data was stored in the database, as they are much smaller and will not block the RAM.
+```{r}
+
+#I will only analyse screens which quality control was regarded as TRUE
+
+list_screens <- query_genes %>% filter(qc_general == T) %>% pull(screen) %>% sort()
+
+#There are 207 screens in total. 53 of them were stored in hard drives, while 154 where in the database. 
+
+class_cells <- 0
+
+list_screens_database <- list_screens[54:207]
+
+pb <- txtProgressBar(min = 0, max = 154, style = 3)
+
+count <- 1
+
+for(screen_name in list_screens_database[c(5,59)]){
+  
+  plates <- list.files("/Volumes/EXTHD0362/", pattern = screen_name)
+  
+  for(plate_file in plates[1]){
+    
+    decompress_file("./", paste0("/Volumes/EXTHD0362/", plate_file))
+    
+    data <- fread(list.files("./", pattern = ".csv"), data.table = F,
+                  drop = c("actin.m.cx", "actin.m.cy", "dark", "fussel", "weak_tubulin"), verbose = T, nThread = 8) %>% 
+                  filter(DNA.m.cx>100 & DNA.m.cx<1948, DNA.m.cy>100 & DNA.m.cy<1948)
+    
+          
+    plate <- data$plate[1]  
+      
+    class_cells <- class_cells+nrow(data)
+    
+    print(paste0(screen_name, "_", plate, " loaded"))
+    
+    for (feature in numeric_features){
+        
+      if(list_mads[[screen_name]][[feature]] != 0){
+          
+          data[feature] <- data_normalization(data[[feature]], list_medians[[screen_name]][[feature]], list_mads[[screen_name]][[feature]])
+          
+      }else{data[feature] <- glog(data[[feature]], lambda = 1)}
+    }
+
+
+      data <- split(data, f = data$well)
+      
+      #It takes 5 seconds. 
+      
+      mclapply(1:384,function(i){
+        
+        cell_classification(data, list_wells_database[i])
+        
+      }, mc.cores = 7, mc.preschedule = F, mc.cleanup = T)
+      
+      rm(data)
+      
+      print(paste0(screen_name, "_", plate, " completed. Number of classified cells: ", round((class_cells/1000000),3), " million"))
+      
+      file.remove(list.files("./", pattern = ".csv"))
+
+  }
+  
+  count <- count + 1
+  
+  setTxtProgressBar(pb, count)
+    
+}
+
+#The code works but as it iterates, the RAM is used up. The only solution to free up the RAM seems to be to restart R. 
+#In order to keep the loop I need to put the code in different R script. 
+
+
+```
+##Variables for pipeline
+Since I want to restart R after every screen  is analysed the code has to be in an R file (pipeline_code.R). However some initial values have to be defined. 
+```{r}
+count <- 1
+
+list_screens_database <- list_screens[54:207]
+
+pb <- txtProgressBar(min = 0, max = 154, style = 3)
+
+class_cells <- 0
+```
+##Hard drives plates
+S001 to S064 are stored in hard drives as big csv files. I tried to process them in the server but it did not work out well. For that reason I will process them in my computer. 
+###EXTHD0361
+37 screens are stored in this hard drive. 
+```{r}
+
+count <- 1
+
+list_screens_361 <- dir("/Volumes/EXTHD0361/syngene_screen/raw_data/")
+
+list_screens_361_good <- list_screens_361[which(list_screens_361 %in% list_screens)]
+
+pb <- txtProgressBar(min = 1, max = length(list_screens_361_good), style = 3)
+
+
+
+```
+###EXTHD0360
+22 screens are stored in this hard drive. 
+```{r}
+
+count <- 1
+
+list_screens_360 <- dir("/Volumes/EXTHD0360/syngene_screen/raw_data/")
+
+list_screens_360_good <- list_screens_360[which(list_screens_360 %in% list_screens)]
+
+pb <- txtProgressBar(min = 1, max = length(list_screens_360_good), style = 3)
+
+
+
+```
+
+
+

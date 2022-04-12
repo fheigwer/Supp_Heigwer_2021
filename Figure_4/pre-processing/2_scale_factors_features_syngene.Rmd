@@ -1,0 +1,263 @@
+---
+title: "scale_factors"
+author: "Sergi Beneyto"
+date: "02/12/2019"
+output: pdf_document
+abstract: in the single cell pipeline I will use the median feature data from the control plates to correct for batch effects and normalise the data. In order to to do that I need to calculate the median and median absolute deviation of the control plates of each screen. There are two control plates for each screen, one at the beginning and one at the end. I will use both to compute the scale factors. 
+editor_options: 
+  chunk_output_type: console
+---
+#Package loading
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(randomForest)
+library(EBImage)
+library(e1071)
+library(RColorBrewer)
+library(plotly)
+library(Rtsne)
+library(jsonlite)
+library(kernlab)
+library(RSQLite)
+library(ggpubr)
+library(uwot)
+library(LMGene)
+library(fastR)
+```
+#Objects loading
+```{r}
+
+query_genes <- readRDS("objects/query_genes.rds")
+
+target_genes <- readRDS("objects/target_genes.rds")
+
+list_screens <- query_genes %>% select(plate_barcode) %>% 
+                  separate(plate_barcode, into = c("barcode", "screen"), sep = "_") %>% pull(screen) 
+
+list_plates <- unique(target_genes$plate) %>% as.character()
+
+list_wells <- unique(target_genes$well) %>% as.character()
+
+list_fields <- c("1", "2", "3", "4")
+
+numeric_features <- load("objects/numeric_features.RData")
+
+
+
+
+```
+#Database connection
+```{r}
+
+database_results <- src_postgres(dbname = "incell2000_test",
+                                 host = "b110-sc2sn01",
+                                 user = "SBeneyto",
+                                 password = "beneyto123")
+
+
+single_cell_data <- tbl(database_results, "D1086_single_cell_V1") 
+
+```
+##Scale factors
+###Database files
+As mentioned above there are two control plates from which the median and mad will be calculated for every feature and screen. Before computing the median and mad raw data values have to be glog transformed. I will use lambda = 1 in order to avoid getting Inf values when the feature score is 0 
+```{r}
+
+list_medians <- list()
+
+list_mads <- list()
+
+glog_lambda <- function(value){
+  
+  return(glog(value, lambda = 1))
+  
+}
+
+pb <- txtProgressBar(min = 0, max = 44, style = 3)
+
+count <- 0
+
+missing_screens <- vector()
+
+for (screen_name in remaining_screens){
+  
+  count <- count+1
+  
+  setTxtProgressBar(pb, count)
+  
+  data <- single_cell_data %>% filter(screen == screen_name, plate %in% c("CTRL1", "CTRL2")) %>% collect()
+  
+  if(nrow(data)>0){
+    
+    list_medians[[screen_name]] <- sapply(data %>% select(numeric_features) %>% sapply(glog_lambda) %>% as.data.frame(), median_no_na)
+    
+    list_mads[[screen_name]] <- sapply(data %>% select(numeric_features) %>% sapply(glog_lambda) %>% as.data.frame(), mad_no_na)
+    
+    save(list_medians, list_mads, file = "objects/scale_factors.RData")
+    
+    print(paste0(screen_name, " computed"))
+  
+  }else{
+    
+    missing_screens <- c(missing_screens, screen_name)
+    
+    print(paste0(screen_name, " missing"))
+    
+    }
+}
+
+#There are 15 screens in which the scale factors were not computed correctly. The problem was that there is a row with NA values. 
+
+empty_screens <- vector()
+
+for (screen in names(list_mads)){
+  
+  if(is.na(list_mads[[screen]][["dist.10.nn"]])){
+    
+    empty_screens <- c(empty_screens, screen)
+    
+    print(paste0(screen, " empty"))
+    
+  }else{print(paste0(screen, " complete"))}
+}
+
+#If I eliminated the NA values then the median and mad can be computed.
+
+median_no_na <- function(column_values){
+  
+  return(median(column_values, na.rm = T))
+
+}
+
+mad_no_na <- function(column_values){
+  
+  return(mad(column_values, na.rm = T))
+
+}
+
+
+missing_screens <- vector()
+
+for (screen_name in empty_screens[2:14]){
+  
+  data <- single_cell_data %>% filter(screen == screen_name, plate %in% c("CTRL1", "CTRL2")) %>% collect()
+  
+  if(nrow(data)>0){
+    
+    list_medians[[screen_name]] <- sapply(data %>% select(numeric_features) %>% sapply(glog_lambda) %>% as.data.frame(), median_no_na)
+    
+    list_mads[[screen_name]] <- sapply(data %>% select(numeric_features) %>% sapply(glog_lambda) %>% as.data.frame(), mad_no_na)
+    
+    save(list_medians, list_mads, file = "objects/scale_factors.RData")
+    
+    print(paste0(screen_name, " computed"))
+  
+  }
+}
+
+
+```
+###Hard drives file
+```{r}
+
+screen_name <- "S230"
+
+data <- rbind(read_csv(unzip("S230_CTRL1.zip"), col_names = T), read_csv(unzip("S230_CTRL2.zip"), col_names = T))
+  
+  list_medians[[screen_name]] <- sapply(data %>% select(numeric_features) %>% sapply(glog_lambda) %>% as.data.frame(), median_no_na)
+    
+  list_mads[[screen_name]] <- sapply(data %>% select(numeric_features) %>% sapply(glog_lambda) %>% as.data.frame(), mad_no_na)
+    
+  save(list_medians, list_mads, file = "objects/scale_factors.RData")
+    
+  print(paste0(screen_name, " computed"))
+  
+
+
+```
+##Subsample
+In order to test the perfomance of the different classifiers, I will take a subsample of cells from the complete screen. For each screen until S175 I will randomly select one plate and 6 wells. From each condition 2000 cells will be sampled. By doing this we will get between 1.5 and 2 million cells from very different conditions and screening times which are representative of the diversity of phenotypes in the screen. 
+```{r}
+#In the database all wells have three digits, so I need to add a 0 to the 2-digit wells. 
+
+list_wells_database <- vector()
+
+for (well_name in list_wells){
+  
+  if(nchar(well_name) == 2){
+    
+    list_wells_database <- c(list_wells_database, paste0(strsplit(well_name, "")[[1]][1], "0", strsplit(well_name, "")[[1]][2]))
+    
+  }else{list_wells_database <- c(list_wells_database, well_name)}
+  
+}
+
+
+#Only screens with good quality control will be selected. 
+
+list_good_screens <- query_genes %>% separate(plate_barcode, into = c("barcode", "screen")) %>% filter(qc_general == T) %>% pull(screen)
+
+#S001 to S064 are not in the database but in hard drives. 
+
+list_good_screens <- sort(list_good_screens)[54:207]
+
+#I will not get data from S175 to S233 since it takes very very long to get it from the database. 
+
+list_good_screens <- list_good_screens[1:103]
+
+#In order to have easy access when I ran the programme I will put every screen as an item of a list. Inside I will write the plate, wells and fields from which raw images will be copied. 
+
+list_chosen_conditions <- list()
+
+for(screen in list_good_screens){
+  
+  list_chosen_conditions[[screen]] <- list("plate" = sample(list_plates, 1),
+                                       "wells" = sample(list_wells_database, 6, replace = F))
+  
+}
+
+#I will sample 2000 cells from each of the conditions. 
+
+count <- 0
+
+pb <- txtProgressBar(min = 0, max = length(list_good_screens)*6, style = 3)
+
+for(screen_name in list_good_screens){
+  
+  plate_name <- as.character(list_chosen_conditions[[screen_name]][["plate"]])
+  
+  data <- single_cell_data %>% filter(screen == screen_name, plate == plate_name) %>% collect(n= Inf)
+  
+  for (well_name in list_chosen_conditions[[screen_name]][["wells"]]){
+    
+    count <- count + 1
+    
+    setTxtProgressBar(pb, count)
+    
+    data_well <- data %>% filter(well == well_name)
+    
+    if(nrow(data_well >= 2000)){
+      
+      data_sampled <- sample_n(data_well, size = 2000, replace = F)
+      
+    }else{data_sampled <- data_well}
+    
+    if(count == 1){
+      
+      write_csv(data_sampled, path = "objects/subsample_raw_data.csv", col_names = T)
+      
+    }else{write_csv(data_sampled, path = "objects/subsample_raw_data.csv", col_names = F, append = T)}
+  }
+}
+
+subsample <- read_csv("objects/subsample_raw_data.csv", col_names = T, col_types = cols(plate = col_character()))
+
+```
+

@@ -1,0 +1,99 @@
+---
+title: "beta_gal_analysis"
+author: "Florian Heigwer"
+date: "11/3/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(EBImage)
+library(cowplot)
+```
+
+## R Markdown
+
+```{r cars}
+
+files <- list.files("processed_data/",pattern = "*.png",full.names = T)
+
+pixel_counts <- lapply(files, function(x){readImage(x) %>% table() %>% c(.,"well"=x)})
+
+this_data <- bind_rows(pixel_counts,.id = "well") %>% 
+  mutate(well=files) %>% 
+  mutate(treatment = if_else(grepl("A-3|A-4|C-3|C-4|D-4|D-5|B-4|B-5",well),"DOUBLE",
+                             if_else(grepl("A-1|A-2|C-1|C-2",well),"CSN",
+                                     if_else(grepl("A-5|C-5",well),"CDK2",
+                                             if_else(grepl("A-6|C-6",well),"CTRL",
+                                                     if_else(grepl("B-3|D-3",well),"Etop",
+                                                             if_else(grepl("B-2|C-2",well),"OTHER",
+                                                                     if_else(grepl("B-1|D-1|B-6|D-6",well),"CTRL","OTHER")
+                                
+                             )))))))
+
+colnames(this_data) <- c("black","background","negative","positive","well","treatment")
+
+this_data <- this_data %>% mutate(across(one_of(c("black","background","negative","positive")),as.numeric))
+
+```
+
+# Induction of beta-Gal activity (relative)
+
+```{r}
+p1 <- this_data %>%
+  filter(treatment!="OTHER") %>%
+  group_by(well) %>% 
+  mutate(ratio=positive/negative) %>% 
+ # mutate(positive_p = positive*100/(positive+negative),negative_p = negative*100/(positive+negative)) %>%
+  select(-positive,-negative,-black,-background) %>%
+  gather(type,value,-well,-treatment) %>%
+  ungroup() %>%
+  #mutate(value=value/mean(value[treatment=="CTRL"])) %>%
+  mutate(treatment=factor(c(treatment),levels=c("CTRL","CSN","CDK2","DOUBLE","Etop"))) %>%
+  filter(treatment!="Etop") %>%
+  ggplot(aes(x=treatment,y=value)) +
+    geom_boxplot() +
+    ggsignif::geom_signif(test = "t.test",test.args = "two.sided",comparisons = list(c("DOUBLE","CTRL"),c("DOUBLE","CDK2"),c("DOUBLE","CSN"),c("CSN","CTRL"),c("CDK2","CTRL")),step_increase = 0.2,map_signif_level=c("***"=0.001, "**"=0.01, "*"=0.05, "." = 0.15)) +
+    geom_point() +
+    theme_cowplot() +
+  ggtitle("staining positive pixel ratio")
+
+print(p1)
+```
+
+# Reduction in cell proliferation
+
+```{r}
+p2 <- this_data %>%
+  filter(treatment!="OTHER") %>%
+  group_by(well) %>% 
+  mutate(sum=positive+negative) %>% 
+ # mutate(positive_p = positive*100/(positive+negative),negative_p = negative*100/(positive+negative)) %>%
+  select(-positive,-negative,-black,-background) %>%
+  gather(type,value,-well,-treatment) %>%
+  ungroup() %>%
+    mutate(value=value/mean(value[treatment=="CTRL"])) %>%
+  mutate(treatment=factor(c(treatment),levels=c("CTRL","CSN","CDK2","DOUBLE","Etop"))) %>%
+    filter(treatment!="Etop") %>%
+  ggplot(aes(x=treatment,y=value)) +
+    geom_boxplot() +
+    ggsignif::geom_signif(test = "t.test",test.args = "two.sided",comparisons = list(c("DOUBLE","CTRL"),c("DOUBLE","CDK2"),c("DOUBLE","CSN"),c("CSN","CTRL"),c("CDK2","CTRL")),step_increase = 0.2,map_signif_level=c("***"=0.001, "**"=0.01, "*"=0.05, "." = 0.15)) +
+      geom_point() +
+  theme_cowplot() +
+  ggtitle("cell count")
+
+print(p2)
+```
+
+```{r}
+p3 <- p1+p2
+
+ggsave(filename = "ratio_positive_over_negative_box.pdf",p3,width = 8,height = 4)
+
+```
+
+
+

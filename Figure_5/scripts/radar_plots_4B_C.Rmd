@@ -1,0 +1,795 @@
+---
+title: "radar_plots"
+author: "Sergi Beneyto"
+date: "4/1/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+abstract: in this project one can generate radar plots for specific double perturbations. By doing that one can explore the genetic interaction scores among the visually defined phenotypic groups. Genetic interactions shown here were computed based on the normalised cell count in the morphological groups. 
+---
+
+#Package loading
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(plotly)
+library(jsonlite)
+library(kernlab)
+library(pryr)
+library(LMGene)
+library(gridExtra)
+library(ggpubr)
+library(uwot)
+library(patchwork)
+library(data.table)
+library(dtplyr)
+library(ggiraphExtra)
+library(pheatmap)
+library(devtools)
+```
+
+#Object loading
+
+The only table required to generate the radar plot is called results_data. It contains one row for each double perturbation and group. The columns display the plate, well, query name, query main effect, target main effect, target name, context, group, 4 pi scores, raw p_value, mean pi score and FDR
+
+```{r}
+
+#Load results table
+
+results_data <- readRDS("objects/grp_interactions_norm_cells_130320.rds")
+
+#Bar plot theme
+
+load("objects/bar_plot_theme.RData")
+
+#Radar plot theme
+
+load("objects/radar_plot_theme.RData")
+
+#Colours for the plots
+
+load("objects/colour_codes.RData")
+
+#Legend for Radar plots
+
+load("objects/legend_gis.RData")
+
+
+```
+
+
+#Radar plots
+
+In my thesis I generated radar plots for Cdk2 + COP9 RNAi and also for conditions which cause proteome stress as they phenocopied the phenotypic signature of Cdk2 + CSNX knockdowns. 
+
+The code can be applied to any pair of genes simply by changing the q_gene and t_gene names. 
+
+Depending on the pi score values the x axis limits might have to be expanded so that the group labels are not cut. I have tried to set it but the way the plot is constructed is not really easy...
+
+##Hsc70Cb + Rpn10
+
+Among the gene groups enriched in the signature of negative pi scores for all groups but Big and Elongated, there were proteasome components and members of Hsp70 family. Here there is an example of Hsc70Cb and the regulatoriy proteasomal subunit Rpn10. 
+
+###Crowded
+
+I will first generate the radar plot and the bar plot for Crowded groups.
+
+```{r}
+
+q_gene <- "Hsc70Cb"
+
+t_gene <- "Rpn10"
+
+#Get the data for Crowded groups of the particular double perturbation.
+      
+crwd_hsp_rpn10 <- results_data %>% filter(query_name == q_gene, target_name == t_gene, 
+                                            context == "Crowded") %>% 
+                   mutate(type_gi = if_else(mpi < 0, "Negative", "Positive"), 
+                          group = if_else(group == "Irregular_nucleus","Nucleus", group),
+                          group = if_else(group == "Condensed", "Cond", group),  
+                          group = factor(group, levels = c("Cond", "Nucleus", "Normal","Big")))
+
+#Radar plot
+      
+      
+crwd_hsp_rpn10_radar <- ggplot(crwd_hsp_rpn10, aes(x = group, y = abs(mpi),
+                                                          fill = type_gi)) +
+                              geom_hline(yintercept = seq(0, crwd_hsp_rpn10 %>% pull(mpi) %>%
+                                                            abs() %>% max() %>% floor()), 
+                                                 color = "grey", linetype = "dashed")+
+                              geom_col(width = 0.7) +
+                              scale_fill_manual(values = c("Positive" = sgi_yellow1,
+                                                           "Negative" = sgi_blue)) +
+                              ylab("Absolute pi score") +
+                              labs(fill = "Type of interaction") +
+                              ggtitle("Crowded")+
+                              scale_x_discrete(expand = c(0.1,0.15))+
+                              theme_radar_plot()+
+                              theme(legend.position = "none",
+                                    axis.text.x = element_text(size = 17))+
+                              geom_text(data = crwd_hsp_rpn10 %>% 
+                                         filter(mpi > 0.5 | mpi < (-0.5)), 
+                                         aes(label = round(abs(mpi), digits = 1)),
+                                        color = "black", 
+                                        position = position_stack(vjust = 0.7), size = 6) +
+                              coord_polar(direction = 1)
+
+
+#Here a star is added to the groups whose FDR < 0.1
+
+          
+if(nrow(crwd_hsp_rpn10 %>% filter(fdr<0.1))>0){
+              
+  crwd_hsp_rpn10_radar <- print(crwd_hsp_rpn10_radar+ 
+                                geom_text(data = crwd_hsp_rpn10 %>% filter(fdr < 0.2), 
+                                       aes(label = "*"), color = "black", 
+                                        position = position_stack(vjust = 0.95), size = 7)) 
+              
+}
+
+#Bar plot
+
+#First we get the data for query and target main effects 
+
+main_crwd_hsp_rpn10 <- crwd_hsp_rpn10 %>% select(query_main, target_main, group) %>% 
+                          pivot_longer(cols = c(-group), names_to = "gene", 
+                                    values_to = "effect") %>%
+                        mutate(gene = if_else(gene == "query_main", q_gene, t_gene),
+                               gene = factor(gene, levels = c(q_gene, t_gene)),
+                               group = factor(group, levels = c("Big","Cond", "Elong",
+                                                                "Nucleus", "Normal")))
+
+#Bar plot 
+
+#Here again is recommendable to set the axis scales depending on the main effects values. 
+                        
+          
+bar_main_crwd_hsp_rpn10 <- print(ggplot(main_crwd_hsp_rpn10, aes(x = group, y = effect))+
+                                      geom_bar(stat = "identity", position = "dodge", 
+                                               fill = apple_grey)+
+                                      geom_hline(yintercept = 0, color = "black", 
+                                                 linetype = "dashed")+
+                                      bar_plot_theme()+
+                                      theme(legend.position = "none",
+                                            axis.text.y = element_text(size = 14),
+                                            axis.text.x = element_text(angle = 45, hjust = 1,
+                                                                       vjust = 1,
+                                                                       size = 16),
+                                            strip.background = element_blank()#,
+                                            #strip.text = element_blank()
+                                            )+
+                                      scale_y_continuous(limits = c(-5, 0),
+                                                         breaks = c(seq(-4, 0, by = 2)))+
+                                      ylab("Main effect\n(Z-score)")+
+                                      facet_wrap(~gene, scales = "free_x",ncol = 1))
+
+
+
+```
+
+###Isolated
+
+```{r}
+#Get the data for Isolated groups of the particular double perturbation.
+
+iso_hsp_rpn10 <- results_data %>% filter(query_name == q_gene, target_name == t_gene, 
+                                            context == "Isolated") %>% 
+                   mutate(type_gi = if_else(mpi < 0, "Negative", "Positive"), 
+                          group = if_else(group == "Irregular_nucleus","Nucleus", group),
+                          group = if_else(group == "Condensed", "Cond", group),
+                          group = if_else(group == "Elongated", "Elong", group),  
+                          group = factor(group, levels = c("Cond", "Elong",
+                                                           "Nucleus", "Normal","Big")))
+
+#Radar plot
+      
+      
+iso_hsp_rpn10_radar <- ggplot(iso_hsp_rpn10, aes(x = group, y = abs(mpi),
+                                                          fill = type_gi)) +
+                              geom_hline(yintercept = seq(0, iso_hsp_rpn10 %>% pull(mpi) %>%
+                                                            abs() %>% max() %>% floor()), 
+                                                 color = "grey", linetype = "dashed")+
+                              geom_col(width = 0.7) +
+                              scale_fill_manual(values = c("Positive" = sgi_yellow1,
+                                                           "Negative" = sgi_blue)) +
+                              ylab("Absolute pi score") +
+                              labs(fill = "Type of interaction") +
+                              ggtitle("Isolated")+
+                              scale_x_discrete(expand = c(0.15,0.34))+
+                              theme_radar_plot()+
+                              theme(legend.position = "none",
+                                      axis.text.x = element_text(size = 17),
+                                      axis.title = element_blank())+
+                              guides(fill = guide_legend(title.position = "top", hjust = 0.5))+
+                              geom_text(data = iso_hsp_rpn10 %>% 
+                                         filter(mpi > 0.5 | mpi < (-0.5)), 
+                                         aes(label = round(abs(mpi), digits = 1)),
+                                        color = "black", 
+                                        position = position_stack(vjust = 0.7), size = 6) +
+                              coord_polar(direction = 1)
+
+#Here a star is added to the groups whose FDR < 0.1
+          
+if(nrow(iso_hsp_rpn10 %>% filter(fdr<0.1))>0){
+              
+  iso_hsp_rpn10_radar <- print(iso_hsp_rpn10_radar+ 
+                            geom_text(data = iso_hsp_rpn10 %>% filter(fdr < 0.2), 
+                                       aes(label = "*"), color = "black", 
+                                        position = position_stack(vjust = 0.95), size = 7)) 
+              
+}
+
+
+#Bar plot
+
+#First we get the data for query and target main effects 
+
+main_iso_hsp_rpn10 <- iso_hsp_rpn10 %>% select(query_main, target_main, group) %>% 
+                          pivot_longer(cols = c(-group), names_to = "gene", 
+                                    values_to = "effect") %>%
+                        mutate(gene = if_else(gene == "query_main", q_gene, t_gene),
+                               gene = factor(gene, levels = c(q_gene, t_gene)),
+                               group = factor(group, levels = c("Big","Cond", "Elong",
+                                                                "Nucleus", "Normal")))
+
+#Bar plot 
+
+#Here again is recommendable to set the axis scales depending on the main effects values. 
+                        
+          
+bar_main_iso_hsp_rpn10 <- print(ggplot(main_iso_hsp_rpn10, aes(x = group, y = effect))+
+                                      geom_bar(stat = "identity", position = "dodge", 
+                                               fill = apple_grey)+
+                                      geom_hline(yintercept = 0, color = "black", 
+                                                 linetype = "dashed")+
+                                      bar_plot_theme()+
+                                      theme(legend.position = "none",
+                                            axis.text.y = element_text(size = 14),
+                                            axis.title.y = element_blank(),
+                                            axis.text.x = element_text(angle = 45, hjust = 1,
+                                                                       vjust = 1,
+                                                                       size = 16),
+                                            strip.background = element_blank()#,
+                                            #strip.text = element_blank()
+                                            )+
+                                      scale_y_continuous(limits = c(-5, 0),
+                                                         breaks = c(seq(-4, 0, by = 2)))+
+                                      ylab("Main effect\n(Z-score)")+
+                                      facet_wrap(~gene, scales = "free_x",ncol = 1))
+
+```
+
+###Arranged
+
+Here I arrange the two radar plots and the corresponding main effect bar plots and I also add the legend. 
+
+```{r}
+
+#The legend is extracted from a general radar plot, but it can be generated in the individual plots by adding legend.position = "bottom"
+
+get_legend<-function(a.gplot){
+  tmp <- ggplot_gtable(ggplot_build(a.gplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)}
+
+legend_type_gi <- get_legend(iso_hsp_rpn10_radar + theme(legend.position = "bottom"))
+
+
+  
+hsp_rpn10_arranged <- grid.arrange(arrangeGrob(crwd_hsp_rpn10_radar, iso_hsp_rpn10_radar,  
+                                     bar_main_crwd_hsp_rpn10, bar_main_iso_hsp_rpn10, 
+                                     nrow = 2, ncol = 2, heights = c(1.75,1)),
+                           legend_type_gi, nrow = 2,heights = c(7,1))
+
+
+#I added the query and target names at the top
+
+hsp_rpn10_arranged <- annotate_figure(hsp_rpn10_arranged, 
+                                      top = text_grob(paste0(q_gene, " & ", t_gene),
+                                                      size = 26))
+
+ggsave(hsp_rpn10_arranged, filename = paste0("plots/", q_gene, "_", t_gene, "_radar.pdf"),
+       height = 9.5, width = 8.75)
+
+
+```
+
+##Pitslre + Rpt5
+
+Another interesting double perturbation involved Pitslre, a gene reported to participate in autophagy and the regulatory subunit of the proteasome Rpt5
+
+###Crowded
+
+I will first generate the radar plot and the bar plot for Crowded groups.
+
+```{r}
+
+q_gene <- "Pitslre"
+
+t_gene <- "Rpt5"
+
+#Get the data for Crowded groups of the particular double perturbation.
+      
+crwd_pits_rpt5 <- results_data %>% filter(query_name == q_gene, target_name == t_gene, 
+                                            context == "Crowded") %>% 
+                   mutate(type_gi = if_else(mpi < 0, "Negative", "Positive"), 
+                          group = if_else(group == "Irregular_nucleus","Nucleus", group),
+                          group = if_else(group == "Condensed", "Cond", group),  
+                          group = factor(group, levels = c("Cond", "Nucleus", "Normal","Big")))
+
+#Radar plot
+      
+      
+crwd_pits_rpt5_radar <- ggplot(crwd_pits_rpt5, aes(x = group, y = abs(mpi),
+                                                          fill = type_gi)) +
+                              geom_hline(yintercept = seq(0, crwd_pits_rpt5 %>% pull(mpi) %>%
+                                                            abs() %>% max() %>% floor()), 
+                                                 color = "grey", linetype = "dashed")+
+                              geom_col(width = 0.7) +
+                              scale_fill_manual(values = c("Positive" = sgi_yellow1,
+                                                           "Negative" = sgi_blue)) +
+                              ylab("Absolute pi score") +
+                              labs(fill = "Type of interaction") +
+                              ggtitle("Crowded")+
+                              scale_x_discrete(expand = c(0.1,0.15))+
+                              theme_radar_plot()+
+                              theme(legend.position = "none",
+                                    axis.text.x = element_text(size = 17))+
+                              geom_text(data = crwd_pits_rpt5 %>% 
+                                         filter(mpi > 0.5 | mpi < (-0.5)), 
+                                         aes(label = round(abs(mpi), digits = 1)),
+                                        color = "black", 
+                                        position = position_stack(vjust = 0.7), size = 6) +
+                              coord_polar(direction = 1)
+
+
+#Here a star is added to the groups whose FDR < 0.1
+
+          
+if(nrow(crwd_pits_rpt5 %>% filter(fdr<0.1))>0){
+              
+  crwd_pits_rpt5_radar <- print(crwd_pits_rpt5_radar+ 
+                            geom_text(data = crwd_pits_rpt5 %>% filter(fdr < 0.2), 
+                                       aes(label = "*"), color = "black", 
+                                        position = position_stack(vjust = 0.95), size = 7)) 
+              
+}
+
+#Bar plot
+
+#First we get the data for query and target main effects 
+
+main_crwd_pits_rpt5 <- crwd_pits_rpt5 %>% select(query_main, target_main, group) %>% 
+                          pivot_longer(cols = c(-group), names_to = "gene", 
+                                    values_to = "effect") %>%
+                        mutate(gene = if_else(gene == "query_main", q_gene, t_gene),
+                               gene = factor(gene, levels = c(q_gene, t_gene)),
+                               group = factor(group, levels = c("Big","Cond", "Elong",
+                                                                "Nucleus", "Normal")))
+
+#Bar plot 
+
+#Here again is recommendable to set the axis scales depending on the main effects values. 
+                        
+          
+bar_main_crwd_pits_rpt5 <- print(ggplot(main_crwd_pits_rpt5, aes(x = group, y = effect))+
+                                      geom_bar(stat = "identity", position = "dodge", 
+                                               fill = apple_grey)+
+                                      geom_hline(yintercept = 0, color = "black", 
+                                                 linetype = "dashed")+
+                                      bar_plot_theme()+
+                                      theme(legend.position = "none",
+                                            axis.text.y = element_text(size = 14),
+                                            axis.text.x = element_text(angle = 45, hjust = 1,
+                                                                       vjust = 1,
+                                                                       size = 16),
+                                            strip.background = element_blank()#,
+                                            #strip.text = element_blank()
+                                            )+
+                                      scale_y_continuous(limits = c(-5, 0),
+                                                         breaks = c(seq(-4, 0, by = 2)))+
+                                      ylab("Main effect\n(Z-score)")+
+                                      facet_wrap(~gene, scales = "free_x",ncol = 1))
+
+
+
+```
+
+###Isolated
+
+```{r}
+#Get the data for Isolated groups of the particular double perturbation.
+
+iso_pits_rpt5 <- results_data %>% filter(query_name == q_gene, target_name == t_gene, 
+                                            context == "Isolated") %>% 
+                   mutate(type_gi = if_else(mpi < 0, "Negative", "Positive"), 
+                          group = if_else(group == "Irregular_nucleus","Nucleus", group),
+                          group = if_else(group == "Condensed", "Cond", group),
+                          group = if_else(group == "Elongated", "Elong", group),  
+                          group = factor(group, levels = c("Cond", "Elong",
+                                                           "Nucleus", "Normal","Big")))
+
+#Radar plot
+      
+      
+iso_pits_rpt5_radar <- ggplot(iso_pits_rpt5, aes(x = group, y = abs(mpi),
+                                                          fill = type_gi)) +
+                              geom_hline(yintercept = seq(0, iso_pits_rpt5 %>% pull(mpi) %>%
+                                                            abs() %>% max() %>% floor()), 
+                                                 color = "grey", linetype = "dashed")+
+                              geom_col(width = 0.7) +
+                              scale_fill_manual(values = c("Positive" = sgi_yellow1,
+                                                           "Negative" = sgi_blue)) +
+                              ylab("Absolute pi score") +
+                              labs(fill = "Type of interaction") +
+                              ggtitle("Isolated")+
+                              scale_x_discrete(expand = c(0.15,0.34))+
+                              theme_radar_plot()+
+                              theme(legend.position = "none",
+                                      axis.text.x = element_text(size = 17),
+                                      axis.title = element_blank())+
+                              guides(fill = guide_legend(title.position = "top", hjust = 0.5))+
+                              geom_text(data = iso_pits_rpt5 %>% 
+                                         filter(mpi > 0.5 | mpi < (-0.5)), 
+                                         aes(label = round(abs(mpi), digits = 1)),
+                                        color = "black", 
+                                        position = position_stack(vjust = 0.7), size = 6) +
+                              coord_polar(direction = 1)
+
+#Here a star is added to the groups whose FDR < 0.1
+          
+if(nrow(iso_pits_rpt5 %>% filter(fdr<0.1))>0){
+              
+  iso_pits_rpt5_radar <- print(iso_pits_rpt5_radar+ 
+                            geom_text(data = iso_pits_rpt5 %>% filter(fdr < 0.2), 
+                                       aes(label = "*"), color = "black", 
+                                        position = position_stack(vjust = 0.95), size = 7)) 
+              
+}
+
+
+#Bar plot
+
+#First we get the data for query and target main effects 
+
+main_iso_pits_rpt5 <- iso_pits_rpt5 %>% select(query_main, target_main, group) %>% 
+                          pivot_longer(cols = c(-group), names_to = "gene", 
+                                    values_to = "effect") %>%
+                        mutate(gene = if_else(gene == "query_main", q_gene, t_gene),
+                               gene = factor(gene, levels = c(q_gene, t_gene)),
+                               group = factor(group, levels = c("Big","Cond", "Elong",
+                                                                "Nucleus", "Normal")))
+
+#Bar plot 
+
+#Here again is recommendable to set the axis scales depending on the main effects values. 
+                        
+          
+bar_main_iso_pits_rpt5 <- print(ggplot(main_iso_pits_rpt5, aes(x = group, y = effect))+
+                                      geom_bar(stat = "identity", position = "dodge", 
+                                               fill = apple_grey)+
+                                      geom_hline(yintercept = 0, color = "black", 
+                                                 linetype = "dashed")+
+                                      bar_plot_theme()+
+                                      theme(legend.position = "none",
+                                            axis.text.y = element_text(size = 14),
+                                            axis.title.y = element_blank(),
+                                            axis.text.x = element_text(angle = 45, hjust = 1,
+                                                                       vjust = 1,
+                                                                       size = 16),
+                                            strip.background = element_blank()#,
+                                            #strip.text = element_blank()
+                                            )+
+                                      scale_y_continuous(limits = c(-5, 0),
+                                                         breaks = c(seq(-4, 0, by = 2)))+
+                                      ylab("Main effect\n(Z-score)")+
+                                      facet_wrap(~gene, scales = "free_x",ncol = 1))
+
+```
+
+###Arranged
+
+Here I arrange the two radar plots and the corresponding main effect bar plots and I also add the legend. 
+
+```{r}
+
+pits_rpt5_arranged <- grid.arrange(arrangeGrob(crwd_pits_rpt5_radar, iso_pits_rpt5_radar,  
+                                     bar_main_crwd_pits_rpt5, bar_main_iso_pits_rpt5, 
+                                     nrow = 2, ncol = 2, heights = c(1.75,1)),
+                           legend_type_gi, nrow = 2,heights = c(7,1))
+
+
+#I added the query and target names at the top
+
+pits_rpt5_arranged <- annotate_figure(pits_rpt5_arranged, 
+                                      top = text_grob(paste0(q_gene, " & ", t_gene),
+                                                      size = 26))
+
+ggsave(pits_rpt5_arranged, filename = paste0("plots/", q_gene, "_", t_gene, "_radar.pdf"),
+       height = 9.5, width = 8.75)
+
+
+```
+
+##Cdk2 + COP9 
+
+The perturbation of Cdk2 and members of the COP9 signalosome gave a very consistent and strong phenotypic signature of positive interactions in Isolated Big and Elongated and negative interaction score in all other groups. 
+
+Since there are four radar plots, I will simply make a for loop to make all four of them and store them in a list. 
+
+```{r}
+
+q_gene <- "Cdk2"
+
+list_radar <- list()
+
+for(t_gene in c("CSN3", "CSN8", "CSN7", "CSN5")){
+  
+###########################################################################################
+  
+#Crowded
+  
+  #Get the data for Crowded groups of the particular double perturbation.
+      
+  crwd_cdk2_csn <- results_data %>% filter(query_name == q_gene, target_name == t_gene, 
+                                              context == "Crowded") %>% 
+                     mutate(type_gi = if_else(mpi < 0, "Negative", "Positive"), 
+                            group = if_else(group == "Irregular_nucleus","Nucleus", group),
+                            group = if_else(group == "Condensed", "Cond", group),  
+                            group = factor(group, levels = c("Cond", "Nucleus",
+                                                             "Normal","Big")))
+
+#Radar plot
+      
+      
+  crwd_cdk2_csn_radar <- ggplot(crwd_cdk2_csn, aes(x = group, y = abs(mpi),
+                                                            fill = type_gi)) +
+                                geom_hline(yintercept = seq(0, crwd_cdk2_csn %>% pull(mpi) %>%
+                                                              abs() %>% max() %>% floor()), 
+                                                   color = "grey", linetype = "dashed")+
+                                geom_col(width = 0.7) +
+                                scale_fill_manual(values = c("Positive" = sgi_yellow1,
+                                                             "Negative" = sgi_blue)) +
+                                ylab("Absolute pi score") +
+                                labs(fill = "Type of interaction") +
+                                ggtitle("Crowded")+
+                                scale_x_discrete(expand = c(0.1,0.15))+
+                                theme_radar_plot()+
+                                theme(legend.position = "none",
+                                      axis.text.x = element_text(size = 17))+
+                                geom_text(data = crwd_cdk2_csn %>% 
+                                           filter(mpi > 0.5 | mpi < (-0.5)), 
+                                           aes(label = round(abs(mpi), digits = 1)),
+                                          color = "black", 
+                                          position = position_stack(vjust = 0.7), size = 6) +
+                                coord_polar(direction = 1)
+
+
+#Here a star is added to the groups whose FDR < 0.1
+
+          
+  if(nrow(crwd_cdk2_csn %>% filter(fdr<0.1))>0){
+                
+    crwd_cdk2_csn_radar <- print(crwd_cdk2_csn_radar+ 
+                              geom_text(data = crwd_cdk2_csn %>% filter(fdr < 0.2), 
+                                         aes(label = "*"), color = "black", 
+                                          position = position_stack(vjust = 0.95), size = 7)) 
+                
+  }
+
+#Bar plot
+
+#First we get the data for query and target main effects 
+
+  main_crwd_cdk2_csn <- crwd_cdk2_csn %>% select(query_main, target_main, group) %>% 
+                            pivot_longer(cols = c(-group), names_to = "gene", 
+                                      values_to = "effect") %>%
+                          mutate(gene = if_else(gene == "query_main", q_gene, t_gene),
+                                 gene = factor(gene, levels = c(q_gene, t_gene)),
+                                 group = factor(group, levels = c("Big","Cond", "Elong",
+                                                                  "Nucleus", "Normal")))
+
+#Bar plot 
+
+#Here again is recommendable to set the axis scales depending on the main effects values. 
+                        
+          
+  bar_main_crwd_cdk2_csn <- print(ggplot(main_crwd_cdk2_csn, aes(x = group, y = effect))+
+                                        geom_bar(stat = "identity", position = "dodge", 
+                                                 fill = apple_grey)+
+                                        geom_hline(yintercept = 0, color = "black", 
+                                                   linetype = "dashed")+
+                                        bar_plot_theme()+
+                                        theme(legend.position = "none",
+                                              axis.text.y = element_text(size = 14),
+                                              axis.text.x = element_text(angle = 45, hjust = 1,
+                                                                         vjust = 1,
+                                                                         size = 16),
+                                               strip.background = element_blank()#,
+                                            #strip.text = element_blank()
+                                            )+
+                                      scale_y_continuous(limits = c(-5, 0),
+                                                         breaks = c(seq(-4, 0, by = 2)))+
+                                      ylab("Main effect\n(Z-score)")+
+                                      facet_wrap(~gene, scales = "free_x",ncol = 1))
+  
+###########################################################################################
+  
+#Isolated
+  
+  iso_cdk2_csn <- results_data %>% filter(query_name == q_gene, target_name == t_gene, 
+                                            context == "Isolated") %>% 
+                   mutate(type_gi = if_else(mpi < 0, "Negative", "Positive"), 
+                          group = if_else(group == "Irregular_nucleus","Nucleus", group),
+                          group = if_else(group == "Condensed", "Cond", group),
+                          group = if_else(group == "Elongated", "Elong", group),  
+                          group = factor(group, levels = c("Cond", "Elong",
+                                                           "Nucleus", "Normal","Big")))
+
+#Radar plot
+      
+      
+  iso_cdk2_csn_radar <- ggplot(iso_cdk2_csn, aes(x = group, y = abs(mpi),
+                                                            fill = type_gi)) +
+                                geom_hline(yintercept = seq(0, iso_cdk2_csn %>% pull(mpi) %>%
+                                                              abs() %>% max() %>% floor()), 
+                                                   color = "grey", linetype = "dashed")+
+                                geom_col(width = 0.7) +
+                                scale_fill_manual(values = c("Positive" = sgi_yellow1,
+                                                             "Negative" = sgi_blue)) +
+                                ylab("Absolute pi score") +
+                                labs(fill = "Type of interaction") +
+                                ggtitle("Isolated")+
+                                scale_x_discrete(expand = c(0.15,0.34))+
+                                theme_radar_plot()+
+                                theme(legend.position = "none",
+                                        axis.text.x = element_text(size = 17),
+                                        axis.title = element_blank())+
+                                guides(fill = guide_legend(title.position = "top", 
+                                                           hjust = 0.5))+
+                                geom_text(data = iso_cdk2_csn %>% 
+                                           filter(mpi > 0.5 | mpi < (-0.5)), 
+                                           aes(label = round(abs(mpi), digits = 1)),
+                                          color = "black", 
+                                          position = position_stack(vjust = 0.7), size = 6) +
+                                coord_polar(direction = 1)
+
+#Here a star is added to the groups whose FDR < 0.1
+          
+  if(nrow(iso_cdk2_csn %>% filter(fdr<0.1))>0){
+                
+    iso_cdk2_csn_radar <- print(iso_cdk2_csn_radar+ 
+                              geom_text(data = iso_cdk2_csn %>% filter(fdr < 0.2), 
+                                         aes(label = "*"), color = "black", 
+                                          position = position_stack(vjust = 0.95), size = 7)) 
+                
+  }
+
+
+#Bar plot
+
+#First we get the data for query and target main effects 
+
+  main_iso_cdk2_csn <- iso_cdk2_csn %>% select(query_main, target_main, group) %>% 
+                            pivot_longer(cols = c(-group), names_to = "gene", 
+                                      values_to = "effect") %>%
+                          mutate(gene = if_else(gene == "query_main", q_gene, t_gene),
+                                 gene = factor(gene, levels = c(q_gene, t_gene)),
+                                 group = factor(group, levels = c("Big","Cond", "Elong",
+                                                                  "Nucleus", "Normal")))
+
+#Bar plot 
+
+#Here again is recommendable to set the axis scales depending on the main effects values. 
+                        
+          
+  bar_main_iso_cdk2_csn <- ggplot(main_iso_cdk2_csn, aes(x = group, y = effect))+
+                                        geom_bar(stat = "identity", position = "dodge", 
+                                                 fill = apple_grey)+
+                                        geom_hline(yintercept = 0, color = "black", 
+                                                   linetype = "dashed")+
+                                        bar_plot_theme()+
+                                        theme(legend.position = "none",
+                                              axis.text.y = element_text(size = 14),
+                                              axis.title.y = element_blank(),
+                                              axis.text.x = element_text(angle = 45, hjust = 1,
+                                                                         vjust = 1,
+                                                                         size = 16),
+                                               strip.background = element_blank()#,
+                                            #strip.text = element_blank()
+                                            )+
+                                      scale_y_continuous(limits = c(-5, 0),
+                                                         breaks = c(seq(-4, 0, by = 2)))+
+                                      ylab("Main effect\n(Z-score)")+
+                                      facet_wrap(~gene, scales = "free_x",ncol = 1)
+
+
+
+  cdk2_csn_arranged <- grid.arrange(arrangeGrob(crwd_cdk2_csn_radar, iso_cdk2_csn_radar,  
+                                       bar_main_crwd_cdk2_csn, bar_main_iso_cdk2_csn, 
+                                       nrow = 2, ncol = 2, heights = c(1.75,1)),
+                             legend_type_gi, nrow = 2,heights = c(7,1))
+
+
+#I added the query and target names at the top
+
+  cdk2_csn_arranged <- annotate_figure(cdk2_csn_arranged, 
+                                        top = text_grob(paste0(q_gene, " & ", t_gene),
+                                                        size = 26))
+  
+  list_radar[[paste0(q_gene, "_", t_gene)]] <- cdk2_csn_arranged
+  
+  ggsave(cdk2_csn_arranged, filename = paste0("plots/", q_gene, "_", t_gene, "_radar.pdf"),
+       height = 9.5, width = 8.75)
+  
+}
+
+```
+
+# Plot barcharts identifieable on a combined scale
+
+```{r}
+
+comb <- bind_rows( "isolated" = main_iso_cdk2_csn, 
+                   "isolated" = main_iso_hsp_rpn10, 
+                   "isolated" = main_iso_pits_rpt5 ,
+                   "crowded" = main_crwd_cdk2_csn,
+                   "crowded" = main_crwd_hsp_rpn10,
+                   "crowded" = main_crwd_pits_rpt5, 
+                   .id = "crowding")
+
+ p1 <- comb %>% 
+   filter(gene %in% c("CSN5","Cdk2")) %>%
+   ggplot( aes(x = group, y = effect))+
+          geom_bar(stat = "identity", position = "dodge", 
+                   fill = apple_grey)+
+          geom_hline(yintercept = 0, color = "black", 
+                     linetype = "dashed")+
+          bar_plot_theme()+
+          theme(legend.position = "none",
+                axis.text.y = element_text(size = 14),
+                axis.title.y = element_blank(),
+                axis.text.x = element_text(angle = 45, hjust = 1,
+                                           vjust = 1,
+                                           size = 16),
+                 strip.background = element_blank()#,
+              #strip.text = element_blank()
+              )+
+        scale_y_continuous(limits = c(-1.3, 1.3),
+                           breaks = c(seq(-1, 1, by = 1)))+
+        ylab("Main effect\n(Z-score)")+
+        facet_wrap(~ gene + crowding, scales = "free",ncol = 2)
+ 
+ ggsave("plots/CSN5_Cdk2_combined_main_effect_bar.pdf",p1)
+ 
+p2 <- comb %>% 
+   filter(gene %in% c("Hsc70Cb","Rpn10")) %>%
+   ggplot( aes(x = group, y = effect))+
+          geom_bar(stat = "identity", position = "dodge", 
+                   fill = apple_grey)+
+          geom_hline(yintercept = 0, color = "black", 
+                     linetype = "dashed")+
+          bar_plot_theme()+
+          theme(legend.position = "none",
+                axis.text.y = element_text(size = 14),
+                axis.title.y = element_blank(),
+                axis.text.x = element_text(angle = 45, hjust = 1,
+                                           vjust = 1,
+                                           size = 16),
+                 strip.background = element_blank()#,
+              #strip.text = element_blank()
+              )+
+        scale_y_continuous(limits = c(-5, 1.5),
+                           breaks = c(seq(-5, 2, by = 2)))+
+        ylab("Main effect\n(Z-score)")+
+        facet_wrap(~ gene + crowding, scales = "free",ncol = 2)
+ 
+  ggsave("plots/Rpn10_HSC70Cb_combined_main_effect_bar.pdf",p2)
+ 
+
+```
+

@@ -1,0 +1,585 @@
+---
+title: "classifier_development"
+author: "Sergi"
+date: "12/16/2019"
+output: pdf_document
+abstract: the aim of this project is to create an algorithm which classifies cells into well and bad segmented. The aim is to rule out as many segmentation errors as possible before starting the downstream analysis. I have retrieved single cell images from many different screens which will act as training set. The labelling app designed in previous approaches will be again used here. The feature values of the single cell objects are processed. This means that they were glog transformed with lambda = 1 and robust Z-scored transformed using the scale factors from the control plates. 
+editor_options: 
+  chunk_output_type: console
+---
+#Package loading
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(randomForest)
+library(EBImage)
+library(e1071)
+library(RColorBrewer)
+library(plotly)
+library(Rtsne)
+library(jsonlite)
+library(kernlab)
+library(RSQLite)
+library(rlist)
+library(plyr)
+library(LMGene)
+library(gridExtra)
+library(ggpubr)
+library(uwot)
+library(kernlab)
+library(nnet)
+library(SuperLearner)
+library(KernelKnn)
+library(ranger)
+library(ISLR)
+```
+#Initial training set
+Using the labelling app, I have assigned 1000 single cells to groups based on whether they were well or bad segmented. Here I will explore the training set to see how well the groups are separated by our labelling approach. The training set has 1000 instances. It is well balanced as there are almost the same number of well and bad segmented. 
+As I was labelling a random forest was being trained. This initial classifier has an error rate of 26 %, so basically a 74 % accuracy. 
+##Cell distribution
+```{r}
+
+load("objects/numeric_features.RData")
+
+#I need to convert the good_segm column into a factor column for plotting. 
+
+#There is an error in cells from S126, therefore they have to be excluded. 
+
+training_set <- readRDS("training_set_dataframe/training_set.rds") %>% mutate(good_segm = factor(good_segm, levels = c("Yes", "No"))) %>% 
+                  filter(screen != "S126")
+
+#The classifier has an accuracy of 74 %. The error is higher for bad segmented cells than for good segmented cells. 
+
+filtering_rf_initial <- readRDS("objects/classifier.rds")
+
+#Important features
+
+varImpPlot(filtering_rf_initial)
+
+#As expected the top features are correspond to the cel body. However, there are more DNA features which are important for the initial classifier compared to the initial filtering classifier of the time-resolved screen. 
+
+##########################################################################################################################################################
+
+#UMAP all features.
+
+#I will make a UMAP of all cells to see how they distribute in a 2D map. 
+
+umap_initial_all_data <- training_set  %>% select(good_segm, numeric_features) %>% uwot::umap(n_neighbors = 30) %>% as.data.frame() %>% 
+                                    dplyr::rename(dimension1 = V1, dimension2 = V2) %>% mutate(good_segm = training_set %>% pull(good_segm))
+
+load("~/Desktop/Sergi_master_thesis/themes/umap_theme.RData")
+
+google_green <- "#3cba54"
+
+google_red <- "#db3236"
+
+colours <- c(google_green, google_red)
+
+umap_initial_all_plot <- ggplot(umap_initial_all_data, aes(x=dimension1, y= dimension2, color = good_segm))+
+                              geom_point(size = 2)+
+                              umap_theme()+
+                              ggtitle(paste0("Initial training set"))+
+                              theme(
+                              legend.title = element_text(size = 16),
+                              plot.title = element_text(size = 25))+
+                              scale_color_manual(values = colours)+
+                              guides(colour = guide_legend(nrow = 1, byrow = T, override.aes = list(size = 6)))+
+                              xlab("UMAP dimension 1")+
+                              ylab("UMAP dimension 2")+
+                              labs(color = "Good segmentation")
+
+ggsave(umap_initial_all_plot, filename = "objects_classification/1000_rf/initial_rf/umap_initial_all_features.pdf", device = "pdf")
+
+
+#UMAP 20 most important features
+
+imp_feat_initial_rf <- filtering_rf_initial$importance %>% as.data.frame() %>% rownames_to_column(var = "feature") %>% 
+                        arrange(desc(MeanDecreaseAccuracy)) %>% slice(1:20) %>% pull(feature)
+
+umap_initial_imp_data <- training_set  %>% select(good_segm, imp_feat_initial_rf) %>% uwot::umap() %>% as.data.frame() %>% 
+                              dplyr::rename(dimension1 = V1, dimension2 = V2) %>% mutate(good_segm = training_set %>% pull(good_segm))
+
+
+umap_initial_imp_plot <- ggplot(umap_initial_imp_data, aes(x=dimension1, y= dimension2, color = good_segm))+
+                                            geom_point(size = 2)+
+                                            umap_theme()+
+                                            ggtitle(paste0("Initial training set"))+
+                                            theme(
+                                            legend.title = element_text(size = 16),
+                                            plot.title = element_text(size = 25))+
+                                            scale_color_manual(values = colours)+
+                                            guides(colour = guide_legend(nrow = 1, byrow = T, override.aes = list(size = 6)))+
+                                            xlab("UMAP dimension 1")+
+                                            ylab("UMAP dimension 2")+
+                                            labs(color = "Good segmentation")
+
+ggsave(umap_initial_imp_plot, filename = "objects_classification/1000_rf/initial_rf/umap_initial_imp_features.pdf", device = "pdf")
+
+#Even using only the 20 most important features there is no clear separation between the groups. 
+
+
+```
+
+##Model optimization
+
+Here I will try to optimise the algorithm parameters for the segmentation classification. I wil do it for a random forest and for a svm machine. 
+
+###Random forest
+
+I will try the model with all features and only with the 20 most important ones for the initial classifier, although generally random forests have higher accuracy when all features are included as non-informative values will not be ignored. 
+
+```{r}
+
+#I will use 5-fold cross-validation to determine the accuracy of the model. 
+
+control <- trainControl(method = "cv", number = 5, verboseIter = T, savePredictions = T)
+
+#The only parameter I will optimise is the "mtry". The default value is the square root of the number of features, in this case 8. 
+
+rf_mtry_grid <- expand.grid(mtry = c(2:30))
+
+#Optimised random forest with all features
+
+set.seed(100)
+rf_initial_optimized_all <- train(good_segm~., data = training_set %>% select(good_segm, numeric_features), trControl = control, method = "rf", 
+                              tuneGrid = rf_mtry_grid, verbose = T)
+
+#The best model had an accuracy of 74.5 % which just slightly better than the initial random forest. The optimal mtry value is 15.
+
+
+
+```
+###SVM
+Last time the final most accurate model was a SVM with a radial kernel. 
+```{r}
+
+set.seed(100)
+svmradial_initial <- train(good_segm~., data = training_set %>% select(good_segm, numeric_features), trControl = control, method = "svmRadial",
+                      tuneGrid  = expand.grid(C =c(0.75,1,1.5,2,5,10,15,20,30,40), sigma = seq(0.01,0.2, by = 0.01)))
+
+#The model with the higher accuracy had 0.713. 
+
+#I will try a polynomial svm 
+
+set.seed(100)
+svmpoly_initial <- train(good_segm~., data = training_set %>% select(good_segm, numeric_features), trControl = control, method = "svmPoly",
+                      tuneGrid  = expand.grid(C =c(0.25,0.5, 0.75,1,1.5,2,5,10,15,20), degree = c(2,3,4,5,6,7), scale = 1))
+
+
+```
+###Ensembl classifier
+It is possible to ensemble multiple algorithms and get a weighted algorithm. This is said to increase the accuracy of the individual machine learning algorithms. 
+```{r}
+
+#To use the ensembl algorithm the class function has to be transformed into a numerical column with values 1 and 0. 
+
+segmentation_column <- training_set %>% pull(good_segm) %>% as.numeric()-1
+
+#0 = Yes, 1 = No. 
+
+set.seed(100)
+ensemble_classifier_initial <- SuperLearner(Y = segmentation_column, X = training_set %>% select(numeric_features),
+                                    family = binomial(), SL.library = list("SL.svm","SL.randomForest", "SL.glm", "SL.knn", "SL.lm"), verbose = T)
+
+#The svm and the randomForest are the algorithms with a higher weight. 
+
+```
+##Confusion matrix
+In order to compare the accuracy of the models before and after manual reinspection I will generate a confusion matrix of the initial random forest which is the algorithm that showed a higher classification accuracy. I will use the algorithm developed with the caret package because the accuracy is calculated using cross-validation which is much easier to expalin than the bagging procedure that the Random forest function uses to calculate the accuracy of the model. 
+```{r}
+
+conf_initial_rf <- table(rf_initial_optimized_all$pred$obs, rf_initial_optimized_all$pred$pred) %>% as.data.frame() %>% arrange(Var1, Var2)
+
+    proportion <- vector()
+
+    for(row in 1:nrow(conf_initial_rf)){
+
+         group <- conf_initial_rf[row,1]
+
+         total_cells <- sum(conf_initial_rf %>% filter(Var1 ==group) %>% select(Freq))
+
+         row_proportion <- conf_initial_rf[row, "Freq"]/total_cells
+
+         proportion <- c(proportion, row_proportion)
+
+    }
+  
+    conf_initial_rf <- conf_initial_rf %>% mutate(proportion_cells=proportion,
+                                              Var2 = factor(Var2, levels = c("No", "Yes")))
+                         
+
+#In the confusion matrix it is nicer if the labels are well segmented and wrong segmented
+    
+load("~/Desktop/Sergi_master_thesis/themes/confusion_matrix_theme.RData")
+
+
+confusion_matrix_initial_rf <- ggplot(conf_initial_rf, aes(x=Var1, y= Var2, fill = proportion_cells))+
+                               geom_tile()+
+                               scale_x_discrete(expand = c(0,0))+
+                               scale_y_discrete(expand = c(0,0))+
+                               scale_fill_gradient(low = "white", high = "#4885ed")+
+                               confusion_matrix_theme()+
+                               theme(
+                                 legend.position = "none")+
+                               xlab("user-defined group")+
+                               ylab("predicted group")+
+                               geom_label(data = conf_initial_rf %>% filter(proportion_cells>0.1), 
+                                          aes(x = Var1, y = Var2, label = round(proportion_cells, 2)), size = 6, label.size = 0.5)
+       
+
+ggsave(confusion_matrix_initial_rf, filename = "objects_classification/1000_rf/initial_rf/confusion_matrix.pdf")
+
+```
+##10x 5-fold cross-validation
+In order to increase the accuracy of the model, I will carry out 10 times 5-fold cross-validation. Then I will select cells which have been wrongly classified in 3 or more repeats for manual reinspection.
+```{r}
+
+control <- trainControl(method = "repeatedcv", number = 5, repeats = 10, verboseIter = T, savePredictions = "final")
+
+#I will use the optimised random forest as it was the algorithm with the highest accuracy. 
+
+rf_grid <- expand.grid(mtry= c(8,10,12))
+
+set.seed(100)
+rf_initial_optimized_all <- train(good_segm~., data = training_set %>% select(good_segm, numeric_features), trControl = control, method = "rf", 
+                              tuneGrid  = rf_grid, verbose = T)
+
+#I would like to filter for cells which are not predicted correctly in the 10 steps of the cross-validation process. Only if they are missclassified in more than two of the repetitions we will select them. 
+
+rf_pred_cv <- rf_initial_optimized_all$pred %>% as.data.frame() %>% arrange(rowIndex) %>% 
+                filter((pred == "No" & obs == "Yes") | (pred == "Yes" & obs == "No")) %>% count("rowIndex") %>% filter(freq>2) %>% pull(rowIndex)
+
+#There are 308 cells which were misslabelled in 3 or more repetitions. I will manually reinspect them. I will save the row indexes.
+
+saveRDS(rf_pred_cv, "objects_classification/1000_rf/initial_rf/wrong_cells_rows.rds")
+
+#Since in the relabelling app I would like to show the initial predictions by the model I will save them as rds file. 
+
+saveRDS(rf_initial_optimized_all$pred %>% as.data.frame() %>% arrange(rowIndex), "objects_classification/1000_rf/initial_rf/wrong_predictions.rds")
+
+
+```
+#Clean training set
+I manually inspected 308 cells. 
+##Numbers
+```{r}
+
+#Numbers table. I put the values in a csv file. 
+
+numbers_relabelling <- read.csv2("objects_classification/1000_rf/after_cleanup/numbers_relabelling.csv") %>% mutate(Percentage = round(Percentage, 2))
+
+#I inspected 308 cells (31.27 % of the cells) and relabelled 43 of them (4.36 % of the training set cells). This value is similar to the time-resolved data pipeline. 
+
+pdf(file = "objects_classification/1000_rf/after_cleanup/table_relabelling_numbers.pdf")
+grid.table(numbers_relabelling, rows = NULL)
+dev.off()
+
+```
+##UMAP
+I will make the UMAP with the clean dataset. 
+```{r}
+
+clean_training_set <- readRDS("objects_classification/1000_rf/after_cleanup/training_set_after_inspection.rds") %>% 
+                        mutate(good_segm = factor(good_segm, levels = c("Yes", "No")))
+
+umap_clean_imp_data <- umap_initial_imp_data %>% mutate(good_segm = clean_training_set %>% pull(good_segm))
+
+
+umap_clean_imp_plot <- ggplot(umap_clean_imp_data, aes(x=dimension1, y= dimension2, color = factor(good_segm, levels = c("Yes", "No"))))+
+                                            geom_point(size = 2)+
+                                            umap_theme()+
+                                            ggtitle(paste0("Clean training set"))+
+                                            theme(
+                                            legend.title = element_text(size = 16),
+                                            plot.title = element_text(size = 25))+
+                                            scale_color_manual(values = colours)+
+                                            guides(colour = guide_legend(nrow = 1, byrow = T, override.aes = list(size = 6)))+
+                                            xlab("UMAP dimension 1")+
+                                            ylab("UMAP dimension 2")+
+                                            labs(color = "Good segmentation")
+
+ggsave(umap_clean_imp_plot, filename = "objects_classification/1000_rf/after_cleanup/umap_clean_imp_features.pdf", device = "pdf")
+
+
+```
+##Model optimization
+I will try to get the best model trained on the clean training set. I will use random forest, svm and ensembl classifier in order to determine which algorithm performs best. 
+###Random forest
+```{r}
+
+#I will use 5-fold cross-validation to determine the accuracy of the model. 
+
+control <- trainControl(method = "cv", number = 5, verboseIter = T, savePredictions = T)
+
+#The only parameter I will optimise is the "mtry". The default value is the square root of the number of features, in this case 8. 
+
+rf_mtry_grid <- expand.grid(mtry = c(2:30))
+
+#Optimised random forest with all features
+
+set.seed(100)
+rf_clean_optimized_all <- train(good_segm~., data = clean_training_set %>% select(good_segm, numeric_features), trControl = control, method = "rf", 
+                              tuneGrid = rf_mtry_grid, verbose = T)
+
+#The model only got slightly better. The accuracy increased to 77.3 %. In the time-resolved pipeline we also saw a mild increase of around 4 %. 
+
+set.seed(100)
+rf_clean_optimized_all <- train(good_segm~., data = clean_training_set %>% select(good_segm, numeric_features), trControl = control, method = "rf", 
+                              tuneGrid = expand.grid(mtry = 29), verbose = T)
+
+```
+#####Confusion matrix
+```{r}
+
+conf_optimal_rf <- table(rf_clean_optimized_all$pred$obs, rf_clean_optimized_all$pred$pred) %>% as.data.frame() %>% arrange(Var1, Var2) %>% group_by(Var1) %>% 
+                      mutate(proportion_cells = Freq/sum(Freq), Var2 = factor(Var2, levels = c("No", "Yes")))
+
+
+#In the confusion matrix it is nicer if the labels are well segmented and wrong segmented
+    
+load("~/Desktop/Sergi_master_thesis/themes/confusion_matrix_theme.RData")
+
+
+confusion_matrix_optimal_rf <- ggplot(conf_optimal_rf, aes(x=Var1, y= Var2, 
+                                                           fill = proportion_cells))+
+                               geom_tile()+
+                               scale_x_discrete(expand = c(0,0))+
+                               scale_y_discrete(expand = c(0,0))+
+                               scale_fill_gradient(low = "white", high = "#4885ed")+
+                               confusion_matrix_theme()+
+                               theme(
+                                 legend.position = "none")+
+                               xlab("user-defined group")+
+                               ylab("predicted group")+
+                               geom_label(data = conf_optimal_rf %>% filter(proportion_cells>0.1), 
+                                          aes(x = Var1, y = Var2, 
+                                              label = round(proportion_cells, 2)), 
+                                          size = 6, label.size = 0.5)
+       
+
+ggsave(confusion_matrix_optimal_rf, filename = "objects_classification/1000_rf/after_cleanup/confusion_matrix_rf.pdf")
+
+
+```
+###Svm
+Last time a svm with a radial kernel turn out to be the most efficient model. Perhaps it also makes sense to select a few features and not include all of them as svm are sensitive to redundant features. 
+```{r}
+
+set.seed(100)
+svmradial_clean <- train(good_segm~., data = clean_training_set %>% select(good_segm, numeric_features), trControl = control, method = "svmRadial",
+                      tuneGrid  = expand.grid(C =c(0.75,1,1.5,2,5,10,15,20,30,40), sigma = seq(0.01,0.2, by = 0.01)))
+
+#The model with the higher accuracy had 0.739. Sigma = 0.04 and C = 1.
+
+#Radial svm with only the 20 most important features for the model. Perhaps by eliminating redundant features the accuracy of the svm increases. 
+
+
+set.seed(100)
+svmradial_clean_imp <- train(good_segm~., data = clean_training_set %>% select(good_segm, imp_feat_initial_rf), trControl = control, method = "svmRadial",
+                      tuneGrid  = expand.grid(C =c(0.75,1,1.5,2,5,10,15,20,30,40), sigma = seq(0.01,0.2, by = 0.01)))
+
+#The accuracy increased a bit to 0.756, but it's still worst than the random forest. 
+
+#I will try a polynomial svm 
+
+set.seed(100)
+svmpoly_clean <- train(good_segm~., data = clean_training_set %>% select(good_segm, numeric_features), trControl = control, method = "svmPoly",
+                      tuneGrid  = expand.grid(C =c(0.25,0.5, 0.75,1,1.5,2,5,10,15,20), degree = c(2,3,4,5,6,7), scale = 1))
+
+#This is much worse. 
+
+```
+###Ensembled classifier
+Based on the fact that the random forest and the svm are less accurate than the corresponding algorithms of the time-resolved screen, I will play around with the ensemble classifier. In order to compute the accuracy of the superlearner, we can use the option Cross-validation superlearner which carries out cross-validaton during the generation of the model. It does not directly gives an accuracy values, nevertheless the prediction for each cell is saved. We can simply compare it to the training set to get a performance value. 
+I will compare this procedure with real cross-validation (applying the model to unseen data from the training set, thus from which the label is known).
+```{r}
+
+#To use the ensembl algorithm the class function has to be transformed into a numerical column with values 1 and 0. 
+
+segm_column_clean <- clean_training_set %>% pull(good_segm) %>% as.numeric()-1
+
+#0 = Yes, 1 = No. 
+
+set.seed(100)
+ensemble_classifier_clean <- SuperLearner(Y = segm_column_clean, X = clean_training_set %>% select(numeric_features), 
+                                    family = binomial(), SL.library = list("SL.svm","SL.randomForest", "SL.glm", "SL.knn", "SL.lm"), verbose = T)
+
+#A SVM is given the highest coefficient along with the random forest. 
+
+#10-Fold CV on the complete training set. 
+
+#I will try first 10-fold cross-validation.
+
+set.seed(100)
+ensemble_classifier_clean_cv <- CV.SuperLearner(Y = segm_column_clean, X = clean_training_set %>% select(numeric_features), V = 5, saveAll = T,
+                                    family = binomial(), SL.library = list("SL.svm","SL.randomForest", "SL.glm", "SL.knn", "SL.lm"), verbose = T)
+
+#Summary
+
+summary(ensemble_classifier_clean_cv)
+
+#Accuracy.
+
+#The prediciton outcomes in the cross-validation and for the algorithm are numbers from 0 to one. The closer the number is to 0 the more probable the cell is well segmented and the more to 1 the more likely that is a good segmented cell. 
+
+cv_pred_splearn <- if_else(ensemble_classifier_clean_cv$SL.predict  >0.5, "No", "Yes") %>% as.factor()
+
+table(clean_training_set %>% pull(good_segm), cv_pred_splearn)
+
+#The accuracy of the ensembl is lower than the individual svm or randomforest. 
+
+```
+####Optimised parameters
+I will set the parameteres for the svm and random forest to see if the accuracy of the ensembl classifier increases. 
+```{r}
+
+sl.svm.tuned <- function(...){
+  
+  SL.svm(...,kernel = "radial", cost = 1, gamma =  0.04)
+}
+
+sl.rf.tuned <- function(...){
+  
+  SL.randomForest(...,mtry = 12, ntree = 1000)
+}
+
+set.seed(100)
+ensemble_classifier_tuned <- SuperLearner(Y = segm_column_clean, X = clean_training_set %>% select(numeric_features),
+                                    family = binomial(), SL.library = list("sl.rf.tuned", "SL.svm"))
+
+#Both algorithms are given almost 0.5 as coefficient. 
+
+#Performance measure. 
+
+#10-Fold CV on the complete training set. 
+
+#I will try first 10-fold cross-validation.
+
+set.seed(100)
+ensemble_classifier_tuned_cv <- CV.SuperLearner(Y = segm_column_clean, X = clean_training_set %>% select(numeric_features), V = 5, saveAll = T,
+                                    family = binomial(), SL.library = list("sl.rf.tuned", "SL.svm"), verbose = T)
+
+#Summary
+
+summary(ensemble_classifier_tuned_cv)
+
+#It seems to be slightly more accurate. 
+
+#Accuracy.
+
+#The prediciton outcomes in the cross-validation and for the algorithm are numbers from 0 to one. The closer the number is to 0 the more probable the cell is well segmented and the more to 1 the more likely that is a good segmented cell. 
+
+cv_pred_splearn_tuned <- if_else(ensemble_classifier_tuned_cv$SL.predict  >0.5, "No", "Yes") %>% as.factor()
+
+table(clean_training_set %>% pull(good_segm), cv_pred_splearn_tuned)
+
+#The accuracy is still lower than the random forest alone. It is 76.3 % compared to 77.3 of the random forest. 
+
+```
+###Final model
+```{r}
+
+#A random forest was the algorithm with the higher accuracy. It's still around 5 points lower than the filtering algorithm of the time-resolved screen, but I will test its performance of the subsample of cells. 
+
+saveRDS(rf_clean_optimized_all, file = "objects_classification/1000_rf/after_cleanup/filtering_classifier.rds")
+
+```
+
+#Supp Figures thesis
+
+In the supplementaries of the thesis I will add a plot for every classification algorithm, which will include the confusion matrix and a table of the training set composition. In case I did relabelling it could be interesting to add the initial and final confusion matrices with the corresponding training set tables. 
+
+Patchwork allows to assemble plots and tables on the same object
+
+I would like to make the plots quite small since they're supplementary material, that's why I'll make the labels bigger.
+
+##Confusion matrix
+
+```{r}
+
+data_conf <- conf_optimal_rf %>% ungroup() %>% 
+              mutate(Var1 = if_else(Var1 == "Yes", "Well segmented", "Bad segmented"),
+                     Var2 = if_else(Var2 == "Yes", "Well\nsegmented", "Bad\nsegmented"),
+                     Var2 = factor(Var2, levels = c("Bad\nsegmented", "Well\nsegmented")),
+                     Var1 = factor(Var1, levels = c("Well segmented", "Bad segmented")))
+
+conf_matrix_thesis <- ggplot(data_conf, aes(x=Var1, y= Var2,fill = proportion_cells))+
+                               geom_tile()+
+                               scale_x_discrete(expand = c(0,0))+
+                               scale_y_discrete(expand = c(0,0))+
+                               scale_fill_gradient(low = "white", high = "#4885ed")+
+                               confusion_matrix_theme()+
+                               theme(
+                                 axis.text.y = element_text(hjust = 0.5),
+                                 legend.position = "bottom")+
+                               xlab("user-defined group")+
+                               ylab("predicted group")+
+                               geom_label(data = data_conf %>% filter(proportion_cells>0.1), 
+                                          aes(x = Var1, y = Var2, 
+                                              label = round(proportion_cells, 2)), 
+                                          size = 6, label.size = 0.5)
+
+```
+
+
+##Tables
+
+I will make two tables one which will show the initial group composition of the training set and the final. The other showing the percentage of relabeled and discarded cells after the reinspection step. 
+
+```{r}
+
+
+init_numb_traning <- readRDS("objects_classification/1000_rf/after_cleanup/numbers_cells.rds")
+
+final_numb_training <- readRDS("objects_classification/1000_rf/after_cleanup/numbers_cells_relabelled.rds")
+
+#Labelling table
+
+label_table <- final_numb_training %>% select(group, number_cells) %>% 
+                filter(group != "Well_segmented" & group != "Bad_segmented") %>% 
+                mutate(Proportions = round(number_cells/985, 2))
+
+colnames(label_table) <- c(" ", "Number cells", "Proportion")
+
+rownames(label_table) <- NULL
+
+ttheme_default(base_size = 18)
+
+#Training set composition table
+
+train_table <- init_numb_traning %>% left_join(final_numb_training %>% 
+                                                 dplyr::rename(Final = number_cells)) %>% 
+                dplyr::rename(Initial = number_cells) %>% 
+                select(group, Initial, Final) %>% 
+                filter(group != "Inspected" & group != "Relabelled") %>% 
+                mutate(group = if_else(group == "Well_segmented", "Well segmented", 
+                                       group),
+                       group = if_else(group == "Bad_segmented", "Bad segmented", 
+                                       group)) %>% 
+                dplyr::rename(Group = group)
+
+
+
+
+supp_figure_arrnged <- grid.arrange(arrangeGrob(conf_matrix_thesis + 
+                                                  theme(legend.position = "bottom") +
+                                                guides(fill = guide_colourbar(
+                                                                       title.hjust = 0.5,
+                                                                      barwidth = unit(5, "cm"),
+                                                                      title.vjust = 0.9,
+                                                                      ))+
+                                                  labs(fill = "Proportion of cells")),
+                                    arrangeGrob(tableGrob(label_table, rows = NULL, 
+                                                   theme = ttheme_default(base_size = 15)),
+                                                tableGrob(train_table, rows = NULL, 
+                                                   theme = ttheme_default(base_size = 15)),
+                                                nrow = 2), ncol = 2, widths = c(1, 1))
+
+
+ggsave(supp_figure_arrnged, filename = "plots_thesis/supp_figure7.pdf", height = 6, width = 13)
+
+```

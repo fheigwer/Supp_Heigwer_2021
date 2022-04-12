@@ -1,0 +1,15 @@
+library(tidyverse)
+library(dplyr)
+library(RPostgreSQL)
+library(dbplyr)
+
+test_db <- src_postgres(
+  dbname = "incell2000_test",
+  host = "b110-sc2sn01",
+  user = "florianH",
+  password = "x!Kl9R_p7XZYjLhg"
+)
+
+db_insert_into(test_db$con,"D1086_syngene_classified_cells_sc",single_cell_data)
+
+db_insert_into(test_db$con,"D1086_syngene_classified_cells_agg",aggregated_data)

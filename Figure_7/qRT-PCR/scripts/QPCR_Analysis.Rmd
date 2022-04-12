@@ -1,0 +1,162 @@
+---
+title: "qPCR_Analysis"
+author: "Florian Heigwer"
+date: "14 Dezember 2020"
+output:
+  pdf_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+# This is a qPCR analysis
+
+```{r setup, include=FALSE}
+
+library(tidyverse)
+library(cowplot)
+library(patchwork)
+library(ggsignif)
+
+raw_dat = read_delim(file = "data/20201211_Florian_qPCR_FH_Drs_Dpt_2_Ctvals_mod.txt",delim = "\t")
+
+result <- 
+  raw_dat %>% 
+  select(Cp,Pos,Name) %>% 
+  drop_na() %>% 
+  extract(Pos,c("row","col"),regex = "(\\w)(\\d+)",remove = F) %>% 
+  filter(col!=21) %>%
+ mutate(sample=
+           if_else(col %in% c(3,12,5,14),"CTRL",
+                   if_else(col %in% c(4,13),"CyCE",
+                                   if_else(col %in% c(8,11,17,20),"DOUBLE",
+                                           if_else(col %in% c(6,9,15,18),"CSN","CDK2")))
+           )
+  ) %>%
+  mutate(replicate=
+           if_else(col %in% c(3,4,6,7,8),1,
+                   if_else(col %in% c(9,5,10,11,12,13),2,
+                           if_else(col %in% c(15,16,17),3, 
+                                   if_else(col %in% c(18,19,20,14),4,0
+                              )
+                           )
+                   )
+           )
+  ) %>%
+  mutate(primer= 
+           if_else(row %in% c("C","D","E"),"rps",
+                   if_else(row %in% c("F","G","H"),"Drs",
+                           if_else(row %in% c("I","J","K"),"Dpt",
+                                   NA_character_)
+                  )
+           )
+  ) %>%
+  mutate(Cp=as.numeric(Cp)) %>%
+  filter(primer != "none",sample!="none") %>%
+  select(-Pos,-row,-col,-Name) %>%
+  #unite(replicate,triplicate,replicate) %>%
+  group_by(sample,primer,replicate) %>%
+  summarise(Cp=mean(Cp)) %>%
+  ungroup() %>%
+  spread(primer,Cp) %>%
+  mutate(Drs_expression=2^-(Drs-rps),
+         Dpt_expression=2^-(Dpt-rps)
+         )
+#%>%
+#  drop_na()
+```
+
+## Plot relative expression foldchanges normed to non-targeting control and housekeeping
+
+Rel, pnt and their interaction
+
+```{r, echo=FALSE, warning=FALSE}
+
+p1 <- result %>% 
+  select(sample,Drs_expression,Dpt_expression) %>%
+  #filter(sample %in% c("dome","H2O","Stat92E")) %>%
+  ungroup() %>% 
+  gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="CTRL"])) %>%
+  ungroup() %>%
+  #mutate(value=log2(value)) %>%
+  mutate(sample=factor(c(sample),levels=c("CTRL","CSN","CDK2","DOUBLE","CyCE"))) %>%
+    ggplot(aes(x=sample,y=value)) + 
+      facet_wrap("gene",scales = "free") + 
+     geom_boxplot()+
+    ylab("rel. foldchange") +
+  
+    xlab("RNAi-perturbation") +
+  geom_point() +
+      geom_signif(test = "t.test",test.args = c("alternative"="two.sided"),
+                  comparisons = list(c("CSN","DOUBLE"),c("CDK2","DOUBLE")),
+                  map_signif_level = c("***"=0.001, "**"=0.01, "*"=0.05),
+                  step_increase = 0.1) +
+      geom_hline(yintercept = 1) +
+      theme_cowplot()+ theme(axis.text.x = element_text(angle = -45, vjust = -0.5, hjust=0.3))
+
+print(p1)
+
+ggsave("graphics/Dpt_Drs_rel_expression_paper.pdf",p1)
+
+result %>% 
+  select(sample,Dpt_expression) %>% 
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="CTRL"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>% 
+  filter(gene=="Dpt_expression",sample %in% c("CyCE","DOUBLE")) %>%
+  t.test(data=.,value~sample)
+
+result %>% 
+  select(sample,Dpt_expression) %>% 
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="CTRL"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>% 
+  filter(gene=="Dpt_expression",sample %in% c("CDK2","DOUBLE")) %>%
+  t.test(data=.,value~sample)
+
+result %>% 
+  select(sample,Dpt_expression) %>% 
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="CTRL"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>% 
+  filter(gene=="Dpt_expression",sample %in% c("CSN","DOUBLE")) %>%
+  t.test(data=.,value~sample)
+
+result %>% 
+  select(sample,Drs_expression) %>% 
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="CTRL"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>% 
+  filter(gene=="Drs_expression",sample %in% c("CyCE","DOUBLE")) %>%
+  t.test(data=.,value~sample)
+
+result %>% 
+  select(sample,Drs_expression) %>% 
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="CTRL"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>% 
+  filter(gene=="Drs_expression",sample %in% c("CDK2","DOUBLE")) %>%
+  t.test(data=.,value~sample)
+
+result %>% 
+  select(sample,Drs_expression) %>% 
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="CTRL"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>% 
+  filter(gene=="Drs_expression",sample %in% c("CSN","DOUBLE")) %>%
+  t.test(data=.,value~sample)
+
+```

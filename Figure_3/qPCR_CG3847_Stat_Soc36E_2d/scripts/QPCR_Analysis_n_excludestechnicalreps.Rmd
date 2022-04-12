@@ -1,0 +1,182 @@
+---
+title: "qPCR_Analysis"
+author: "Florian Heigwer"
+date: "22 Oktober 2020"
+output:
+  pdf_document: default
+editor_options: 
+  chunk_output_type: console
+---
+#
+
+# This is a qPCR analysis
+
+```{r setup, include=FALSE}
+
+library(tidyverse)
+library(patchwork)
+library(ggsignif)
+
+
+theme_b110<-function(){
+  theme_classic() +
+  theme(
+    axis.text=element_text(size = 10), 
+    axis.title=element_text(size = 10),
+    plot.title = element_text(size = 12,hjust = 0.5,face="bold"),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size =10),
+    legend.position = "bottom"
+    )
+}
+
+
+raw_dat = read_delim(file = "data/20201112_Florian_qPCR_CS_SOCS36_CG3847_Stat_mod.txt",delim = "\t")
+
+result <- 
+  raw_dat %>% 
+  select(Cp,Pos,Name) %>% 
+  drop_na() %>% 
+  extract(Pos,c("row","col"),regex = "(\\w)(\\d+)",remove = F) %>% 
+ mutate(sample=
+           if_else(col %in% c(3,4),"RLUC",
+                   if_else(col %in% c(5,6,7,8),"CG3847",
+                           if_else(col %in% c(9,10),"Stat","none"))
+           )
+  ) %>%
+  mutate(replicate=
+           if_else(col %in% c(3,5,9),1,
+                   if_else(col %in% c(4,6,10),2,
+                           if_else(col %in% c(7),3, 
+                                   if_else(col %in% c(8),4,0
+                              )
+                           )
+                   )
+           )
+  ) %>%
+  mutate(primer= 
+           if_else(row %in% c("C","D","E"),"rps",
+                   if_else(row %in% c("F","G","H"),"CG3847",
+                           if_else(row %in% c("I","J","K"),"Stat92E",
+                                   if_else(row %in% c("L","M","N"),"Socs36E","none"
+                                                   )
+                                  )
+                  )
+           )
+  ) %>%
+  mutate(Cp=as.numeric(Cp)) %>%
+  filter(primer != "none",sample!="none") %>%
+  select(-Pos,-row,-col,-Name) %>%
+  #unite(replicate,triplicate,replicate) %>%
+  group_by(sample,primer,replicate) %>%
+  summarise(Cp=mean(Cp)) %>%
+  ungroup() %>%
+  spread(primer,Cp) %>%
+  mutate(Socs36_expression=2^-(Socs36E-rps),
+         Stat_expression=2^-(Stat92E-rps),
+         CG3847_expression=2^-(CG3847-rps)
+         )
+
+```
+
+## Plot relative expression foldchanges normed to non-targeting control and housekeeping
+
+Rel, pnt and their interaction
+
+```{r, echo=FALSE, warning=FALSE}
+
+p1 <- result %>% 
+  select(sample,Socs36_expression,Stat_expression,CG3847_expression) %>% 
+  ungroup() %>% 
+  gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="RLUC"])) %>%
+  mutate(gene=factor(c(gene),levels=c("CG3847_expression","Stat_expression","Socs36_expression"))) %>%
+  group_by(sample,gene) %>%
+  mutate(m=mean(value),s=sd(value)/sqrt(length(value)),l=m-s,u=m+s) %>%
+  ungroup() %>% 
+  mutate(sample=factor(c(sample),levels=c("RLUC","Stat","CG3847"))) %>%
+    ggplot(aes(x=sample,y=m)) + 
+      facet_wrap("gene",scales = "fixed",ncol = 1) + 
+      geom_bar(stat="identity",position=position_dodge()) +
+      geom_errorbar(aes(ymin=l, ymax=u),
+                    width=.2,                    # Width of the error bars
+                    position=position_dodge(.9)) +
+      geom_jitter(aes(y=value))+
+      ylab("relative expression") +
+      geom_hline(yintercept = 1) +
+      theme_b110()
+
+print(p1)
+
+ggsave("graphics/relative_expression_plot_bar.pdf",p1,width = 4,height = 10)
+ggsave("graphics/relative_expression_plot_bar.png",p1,width = 4,height = 10)
+
+
+p2 <- result %>% 
+  select(sample,Socs36_expression,Stat_expression,CG3847_expression) %>% 
+  #filter(sample %in% c("dome","H2O","Stat92E")) %>%
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="RLUC"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>%
+  summarize(m=mean(value),s=sd(value)/sqrt(length(value)),l=m-s,u=m+s) %>%
+  ungroup() %>%
+  mutate(sample=factor(c(sample),levels=c("RLUC","Stat","CG3847"))) %>%
+  ggplot(aes(x=sample,y=m)) + 
+  facet_wrap("gene",scales = "fixed") + 
+  geom_bar(stat="identity",position=position_dodge()) +
+  geom_errorbar(aes(ymin=l, ymax=u),
+                width=.2,                    # Width of the error bars
+                position=position_dodge(.9)) +
+  #ylim(c(-2.5,2.5)) + 
+  geom_hline(yintercept = 0) +
+  theme_classic()
+
+
+print(p2)
+
+ggsave("graphics/foldchange_plot.png",p2)
+
+result %>% 
+  select(sample,Socs36_expression) %>% 
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="RLUC"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>% 
+  filter(gene=="Socs36_expression",sample %in% c("RLUC","CG3847")) %>%
+  t.test(data=.,value~sample)
+
+result %>% 
+  select(sample,Socs36_expression) %>% 
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="RLUC"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>% 
+  filter(gene=="Socs36_expression",sample %in% c("RLUC","Stat")) %>%
+  t.test(data=.,value~sample)
+
+result %>% 
+  select(sample,CG3847_expression) %>% 
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="RLUC"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>% 
+  filter(gene=="CG3847_expression",sample %in% c("RLUC","CG3847")) %>%
+  t.test(data=.,value~sample)
+
+result %>% 
+  select(sample,Stat_expression) %>% 
+  ungroup() %>% gather(gene,value,-sample) %>% 
+  group_by(gene) %>% 
+  mutate(value=value/mean(value[sample=="RLUC"])) %>%
+  group_by(sample,gene) %>%
+  mutate(value=log2(value)) %>% 
+  filter(gene=="Stat_expression",sample %in% c("RLUC","Stat")) %>%
+  t.test(data=.,value~sample)
+```
+

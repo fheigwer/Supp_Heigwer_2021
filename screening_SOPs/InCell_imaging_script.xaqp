@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="ISO-8859-1" standalone="no"?>
+<AutoLeadAcquisitionProtocol fingerprint="35225776fde9bba78b1fa0a464851a10" name="ERC_20x_4t" password="689935b988643b7779f765cf46a32d3b" use_subfolders="true" version="99.9">
+    <UserComment/>
+    <Microscopy type="Fluorescence"/>
+    <ObjectiveCalibration focal_length="10.0" id="12206" lineartype="7" magnification="20.0" numerical_aperture="0.45" objective_name="Nikon 20X/0.45, Plan Fluor, ELWD, Corr Collar 0-2.0, CFI/60" pixel_height="0.3250" pixel_width="0.3250" refractive_index="1.0" sac_collar="0.188" unit="µm" x_shift="24.5" y_shift="-13.0" z_shift="98.0"/>
+    <Polychroic id="Y" name="QUAD1"/>
+    <Camera apply_ffc="false" name="Unknown - Unknown" use_ffc="false" version="1.0">
+        <Description/>
+        <ROI columns="-1" rows="-1"/>
+        <Binning value="1 X 1"/>
+        <Bias value="100.0"/>
+        <Gain value="1.0"/>
+        <Size height="2048" width="2048"/>
+    </Camera>
+    <Wavelengths>
+        <Wavelength aperture_rows="50" background_removal="false" dof_factor="8.00" fusion_wave="false" imaging_mode="2-D" index="0" label="" laser_power="100" num_frames_to_avg="1" open_aperture="true" show="false" z_section="1.0" z_slice="0" z_step="0.0">
+            <ExcitationFilter name="DAPI" unit="nm" wavelength="390"/>
+            <EmissionFilter name="DAPI" unit="nm" wavelength="435"/>
+            <Exposure time="400.0000" unit="ms"/>
+            <HWAFOffset unit="µm" value="0.0"/>
+            <FocusOffset unit="µm" value="6.0"/>
+            <FusionData/>
+        </Wavelength>
+        <Wavelength aperture_rows="50" background_removal="false" dof_factor="8.00" fusion_wave="false" imaging_mode="2-D" index="1" label="" laser_power="100" name="Cy3" num_frames_to_avg="1" open_aperture="true" show="false" z_section="0.0" z_slice="1" z_step="2.0">
+            <ExcitationFilter name="Cy3" unit="nm" wavelength="542"/>
+            <EmissionFilter name="Cy3" unit="nm" wavelength="597"/>
+            <Polychroic name="QUAD1"/>
+            <Exposure time="400.0000" unit="ms"/>
+            <HWAFOffset unit="µm" value="0.0"/>
+            <FocusOffset unit="µm" value="12.0"/>
+            <FusionData/>
+        </Wavelength>
+        <Wavelength aperture_rows="50" background_removal="false" dof_factor="8.00" fusion_wave="false" imaging_mode="2-D" index="2" label="" laser_power="100" name="FITC_511" num_frames_to_avg="1" open_aperture="true" show="false" z_section="0.0" z_slice="1" z_step="0.0">
+            <ExcitationFilter name="FITC" unit="nm" wavelength="475"/>
+            <EmissionFilter name="FITC" unit="nm" wavelength="511"/>
+            <Polychroic name="QUAD1"/>
+            <Exposure time="300.0000" unit="ms"/>
+            <HWAFOffset unit="µm" value="0.0"/>
+            <FocusOffset unit="µm" value="12.0"/>
+            <FusionData/>
+        </Wavelength>
+    </Wavelengths>
+    <SoftwareAutoFocus enabled="false" focus_wavelength="first" init_stepping="0.0" max_search_range="4902.0" min_stepping="-1598.0" mode_type="Static" mode_value="20" refocusEachTimePoint="false" show_live_image="false" skip_field="1" skip_well="1"/>
+    <LaserAutoFocus enabled="true" power_level="0.1"/>
+    <Plate columns="24" name="1_Falcon_384" rows="16" version="1.0">
+        <PlateHeight unit="mm" value="14.350"/>
+        <BottomThickness unit="µm" value="188.000"/>
+        <BottomInterface name="Plastic"/>
+        <BottomHeight value="2.610" variability_um="0.0"/>
+        <WellVolume value="120.000"/>
+        <WellParameters height="3.300" shape="Square" size="3.300" unit="mm" width="3.300"/>
+        <TopLeftWellCenterOffset horizontal="12.000" unit="mm" vertical="8.750"/>
+        <WellSpacing horizontal="4.500" unit="mm" vertical="4.500"/>
+    </Plate>
+    <Specimen expected_thickness="1.0" on_slide="false" unit="µm"/>
+    <PlateHeater use="false"/>
+    <PlateMap>
+        <AcquisitionMode>
+            <Layout columns="2" rows="2"/>
+            <Spacing spacing_percentage="" spacing_x="200.0" spacing_y="200.0"/>
+            <Shifting shift_x="0.0" shift_y="0.0"/>
+            <FieldOffsets custom_loc_x="0.0" custom_loc_y="0.0" field_selection="false" flex_num_fields="false" margin="0.0000" mode="formation" number_of_fields="4" pattern="Horizontal Snake" weight="edge">
+                <offset_point index="0" x="-432.8" y="432.8"/>
+                <offset_point index="1" x="432.80000000000007" y="432.8"/>
+                <offset_point index="2" x="432.80000000000007" y="-432.80000000000007"/>
+                <offset_point index="3" x="-432.8" y="-432.80000000000007"/>
+            </FieldOffsets>
+            <Direction value="Horizontal Snake"/>
+        </AcquisitionMode>
+        <ZDimensionParameters enabled="false" linked="false"/>
+        <TimeSchedule burst_count="100" burst_duration="10.0" displayHms="false" enabled="false" incubate_between_time_points="false" mode="spit and stare" time_unit="sec"/>
+    </PlateMap>
+    <Output image_format="TIFF" save_3d_image_in_dv="false" save_as_cellprofiler="false" write_stack_to_dce="" write_stack_to_xml=""/>
+    <StackDestination base_path="system_default" current_path="date_time" image_folder=""/>
+    <Deconvolution camera_intensity_offset="50" correct_bleaching="true" method="Enhanced Ratio (aggressive)" noise_filtering="High" normalize_intensity="true" number_cycles="5" replace_zlines="true" smooth_zlines="true"/>
+    <ReviewScanProtocol activeAnalyses="" reviewScanProtocol="" use="false" useAnalysis="false" usePreviewAnalysis="false" useScanAnalysis="false"/>
+</AutoLeadAcquisitionProtocol>

@@ -1,0 +1,570 @@
+---
+title: "raw_images"
+author: "Sergi"
+date: "11/28/2019"
+output: pdf_document
+abstract: in order to adjust the single cell classification pipeline to the Syngene screen I will probably need to retrain the different classifiers with data from the large-scale screen. This means that I will need single cells images in order to carry out manual labelling using the designed apps. The raw data is stored in several hard drives as well as the corresponding results files. In this markdown I will retrieve raw images form many different query_target conditions in order to have as much diverse phenotypes as possible. 
+editor_options: 
+  chunk_output_type: console
+---
+#Package loading
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(randomForest)
+library(EBImage)
+library(e1071)
+library(RColorBrewer)
+library(plotly)
+library(Rtsne)
+library(jsonlite)
+library(kernlab)
+library(RSQLite)
+library(rlist)
+library(plyr)
+library(LMGene)
+library(gridExtra)
+library(ggpubr)
+library(uwot)
+
+query_genes <- readRDS("objects/query_genes.rds")
+
+target_genes <- readRDS("objects/target_genes.rds")
+```
+#Selection of images
+In order to have images from all screens, I will for every screen sample a plate and five wells. I will only copy images from this conditions. I also will select only one of the four field images for each well. 
+There are roughly 200 screens, if I pick 5 images for each, I will end up with 1000 raw images. Then I could retrieve 100-200 cells/image therefore generating around 100-200 single cell objects. 
+##List screens, plates and wells
+There are 233 screens. However for some of them the quality was not so good, therefore I will exclude them. There is a column that accounts for overall quality of the screen.
+I also need to get the plate and well names. 
+```{r}
+
+list_screens <- query_genes %>% filter(qc_general == T) %>% select(plate_barcode) %>% 
+                  separate(plate_barcode, into = c("barcode", "screen"), sep = "_") %>% pull(screen) 
+
+#It leaves us with 207 screens after the qc filtering.
+
+list_plates <- unique(target_genes$plate) %>% as.character()
+
+list_wells <- unique(target_genes$well) %>% as.character()
+
+list_fields <- c("1", "2", "3", "4")
+
+```
+##Choose raw images
+```{r}
+
+#In order to have easy access when I ran the programme I will put every screen as an item of a list. Inside I will write the plate, wells and fields from which raw images will be copied. 
+
+list_chosen_images <- list()
+
+for(screen in list_screens){
+  
+  list_chosen_images[[screen]] <- list("plate" = sample(list_plates, 1),
+                                       "wells" = sample(list_wells, 5, replace = F))
+  
+  
+}
+
+
+```
+##Copy raw images
+```{r}
+
+copy_raw_images <- function(hard_drive_number, output_folder, list_ids){
+  
+  image_count <- 0
+  
+  folder <- paste0("/Volumes/EXTHD0", hard_drive_number, "/")
+  
+  #folder <- paste0("/Volumes/EXTHD0165/ERC_20x_4t/")
+  
+  folders_list <- list.files(folder)
+  
+  for(screen in names(list_ids)){
+    
+    plate_folder <- grep(paste0(list_ids[[screen]][["plate"]], "_" ,screen), folders_list, value = T)
+    
+    image_files <- list.files(paste0(folder, plate_folder))
+    
+    for(well in list_ids[[screen]][["wells"]]){
+      
+      field <- sample(c("1", "2", "3", "4"), 1)
+      
+      files <- grep(paste0(list_ids[[screen]][["plate"]], "_", screen, "_", well, "_", field), 
+                    image_files, value = T)
+      
+      if(length(files) == 3){
+        
+        file.copy(from = paste0(folder, plate_folder, "/", files), to = output_folder, overwrite = T)
+        
+        image_count <- image_count + 3
+        
+      }
+      
+    }
+  }
+  
+  return(print(paste0(image_count, " raw images copied")))
+}
+
+copy_raw_images(228, "raw_images_files/", list_chosen_images)
+
+```
+##Copy raw data files
+I also need to copy the RData files that are associated with the RData files. 
+```{r}
+
+copy_raw_data_files <- function(hard_drive_number, output_folder, list_ids){
+  
+  files_count <- 0
+  
+  folder <- paste0("/Volumes/EXTHD0", hard_drive_number, "/")
+  
+  raw_images <- list.files("raw_images_files/", pattern = "DAPI")
+  
+  folders_list <- list.files(folder)
+  
+  for(image in raw_images){
+    
+      screen = str_split(image, pattern = "_")[[1]][[6]]
+  
+      plate = str_split(image, pattern = "_")[[1]][[5]]
+      
+      well <- str_split(image, pattern = "_")[[1]][[7]]
+  
+      field <- str_split(image, pattern = "_")[[1]][[8]]
+    
+    plate_folder <- grep(paste0(plate, "_" ,screen), folders_list, value = T)
+    
+    data_file <- list.files(paste0(folder, plate_folder), pattern = paste0(plate, "_", screen, "_", well, "_", field, "_single_cell.RData"))
+    
+    if(length(data_file) == 1){
+      
+      file.copy(from = paste0(folder, plate_folder, "/", data_file), to = output_folder, overwrite = T)
+    
+      files_count <- files_count+1
+       
+    }
+  }
+  
+  return(print(paste0(files_count, " RData files copied")))
+  
+}
+
+
+copy_raw_images(330, "raw_images_files/", list_chosen_images)
+
+
+
+copy_raw_data_files(287, "raw_images_files/", list_chosen_images)
+
+```
+###Missing raw data
+From screen 126 to 232 only the median results are stored in hard drives. The single cell data is only on the database apparently. We should retrieve this data and copied as an RData file.
+```{r}
+
+database_results <- src_postgres(dbname = "incell2000_test",
+                                 host = "b110-sc2sn01",
+                                 user = "SBeneyto",
+                                 password = "beneyto123")
+
+
+single_cell_data <- tbl(database_results, "D1086_single_cell_V1") 
+
+
+for (screen_id in sort(names(list_chosen_images))[158:207]){
+  
+  plate_name <- list_chosen_images[[screen_id]][["plate"]]
+  
+  data <- single_cell_data %>% filter(screen == screen_id, plate == plate_name) %>% collect()
+  
+  for(well_name in list_ids[[screen_id]][["wells"]]){
+    
+    if(nchar(well_name) == 2){
+      
+      well_name_corrected <- paste0(str_split(well_name, "")[[1]][1], "0", str_split(well_name, "")[[1]][2])
+      
+      data_well <- data %>% filter(well == well_name_corrected)
+      
+    }else{data_well <- data %>% filter(well == well_name)}
+    
+    save(data_well, file = paste0("raw_images_files/ERC_20x_4t_SYNA_",  list_chosen_images[[screen_id]][["plate"]], "_",
+                                                              screen_id, "_", well_name, "_single_cell.RData"))
+    
+  }
+  
+  print(paste0(screen_id, " completed"))
+  
+}
+
+
+```
+#Extract single cell images
+Since I will use this set of images to generate the segmentation, density and morphology classifiers, I will copy the segmented image as well as the context one and a bigger field of view as well. Lastly the feature values also have to be saved in the file. 
+The way I will process the data will be to normalise the values by robust Z-transformation using the median and mad of the control plates (CTRL1 and CTRL2) of the corresponding screen, and then glog transform.
+##Objects
+I need to load the scale factors for data normalisation as well as update the functions to extract single cell images. 
+```{r}
+
+load("objects/single_cell_image_old_functions.RData")
+
+load("objects/scale_factors.RData")
+
+raw_images_folder <- "raw_images_files/"
+
+example_dapi <- readImage(paste0(raw_images_folder, "ERC_20x_4t_SYNA_1010_S027_A24_3_DAPI.tif"))
+
+example_actin <- readImage(paste0(raw_images_folder, "ERC_20x_4t_SYNA_1010_S027_A24_3_Cy3.tif"))
+
+example_tubulin <- readImage(paste0(raw_images_folder, "ERC_20x_4t_SYNA_1010_S027_A24_3_FITC.tif"))
+
+data_normalization <- function(value, median, mad){
+  
+  return((glog(value, lambda = 1)-median)/mad)
+  
+}
+
+
+```
+##New functions
+I need to update the functions with the segmentation code we used in the large scale screen. 
+###Normalise images. 
+```{r}
+
+normalise_images <- function(dapi, actin, tubulin){
+  
+  #The input of the function are the three raw images which has been previously selected and read using readImage. 
+  
+  image_list <- list(as.Image(dapi), as.Image(actin), as.Image(tubulin))
+  
+  normalised_images <- list()
+  
+  count = 1
+  
+  for (image in image_list){
+    
+    image <- as.Image(image)
+  
+    if(min(image)==0){
+      
+      if(quantile(image,0.01)!=0){
+        
+        normalised_image=gblur(EBImage::normalize(log(image+quantile(image,0.01))),sigma=1)
+        
+      }else{
+        
+        normalised_image=gblur(EBImage::normalize(log(image+0.0000001)),sigma=1)
+      }
+   }else{
+     normalised_image=gblur(EBImage::normalize(log(image)),sigma=1)  
+   }
+  
+  normalised_images[[count]] <- as.Image(normalised_image)
+  
+  count = count + 1
+  }
+  
+  #The output of the function is a list which has three objects called "norm_dapi", "norm_actin" and "norm_tubulin". Each of them corresponds to the normalised image for each of the channels. 
+  
+  return(list("norm_dapi"= as.Image(normalised_images[[1]]),
+              "norm_actin"= as.Image(normalised_images[[2]]), 
+              "norm_tubulin" = as.Image(normalised_images[[3]])))
+  
+}
+
+
+norm_image <- normalise_images(example_dapi, example_actin, example_tubulin)
+
+```
+###Treshold image
+```{r}
+
+treshold_images <- function(dapi_image, actin_image, tubulin_image){
+  
+  #The function takes as an input the normalised images obtained applying the function normalise_images.
+#The function bwlabel, gives numbers to the segmented cells,  therefore every cell on the image can be identified by an integer. The segmentation follows the procedure that was applied during the feature calculation after the screen was being done. This aspect is key in order to match the segmented cells to entries of the dataframe. 
+  
+  med=median(dapi_image)
+  mit=mean(dapi_image) 
+  
+  actin_binary= actin_image > 0.2
+  strange_behavior=c(0,0,0)
+  names(strange_behavior)=c("dark","fussel","weak_tubulin")
+  
+  if(med<0.15){
+    strange_behavior[1]=1
+  }
+  if(abs(med-mit)>0.06){
+    strange_behavior[2]=1
+  }
+  
+  if(diff(range(tubulin_image))> 0.1  && skewness(tubulin_image)>1.6){
+    if(strange_behavior[1]==1){
+      
+      nuclei_objects = bwlabel(fillHull(opening(thresh(dapi_image,w=31,h=31,offset=0.065))))      
+      
+      body_binary=fillHull(opening( thresh(actin_image,w=120,h=120,offset = 0.007) + (tubulin_image >0.25)))
+      
+    }else{
+      
+      nuclei_objects = bwlabel(fillHull(opening(thresh(dapi_image,w=21,h=21,offset=0.1),makeBrush(5))))
+      
+      body_binary=opening( (actin_image > 0.25) + (tubulin_image >0.20) )
+    }
+    
+  }else{
+    nuclei_objects = bwlabel(fillHull(opening(thresh(dapi_image,w=21,h=21,offset=0.1),makeBrush(5))))
+    
+    body_binary=opening( (actin_image > 0.25) )
+    strange_behavior[3]=1 
+  }
+  
+  nuclei_features <- computeFeatures.moment(x = nuclei_objects)
+  
+  #the function propagate calculates the cell body boundaries, this is segments the cell bodies. It chooses the cells which nucleus has been segmented previously (argument seeds of the function). By defining a mask only the regions which are included here(this is the cell bodies), will be segmented. 
+  
+  body_objects = propagate(actin_image, seeds = nuclei_objects, mask = body_binary, lambda = 3e-4)
+  
+  return(list("nuclei_objects" = nuclei_objects, "nuclei_features" = nuclei_features, "body_objects" = body_objects))
+  
+  #The output is a list which contains three objects. Nuclei objects is a binary image with the segmented nuclei. Each cell has a number which has also been saved. Then nuclei features is a dataframe with the moment features (DNA.m.cx, DNA.m.cy, DNA.m.majoraxis, DNA.m.eccentricity and DNA.m.theta) of the cells whose nuclei has been segmented. Body_objects is an image which contains the segmented cell bodies.
+  
+}
+
+trsh_image <- treshold_images(norm_image$norm_dapi, norm_image$norm_actin, norm_image$norm_tubulin)
+
+```
+###Single cell images
+```{r}
+
+load("objects/numeric_features.RData")
+
+get_single_cell_image <- function(features, dataframe, nuclei_objects, body_objects, image_dapi, image_actin, image_tubulin, screen, field_number, file,
+                                  medians, mads){
+  
+#Features corresponds to the dataframe with the moment features of the segmented cells calculated in the function treshold images. 
+#Dataframe is the array which contains the feature values for the cells that are present in the chosen image.
+#image_field is the field of the image. 
+#Selected well is the randomly chosen well which correspond to the selected image. 
+#Nuclei and body objects are the segmented images obtained in the function treshold images. 
+#Finally the dapi,actin and tubulin images are simply the raw images chosen at the beginning of the pipeline.
+    
+    list_images <- list()
+    
+    list_features <- list()
+    
+    nuclei_stacked <- stackObjects(nuclei_objects, image_dapi,ext = 50)
+  
+    actin_stacked <- stackObjects(body_objects, image_actin ,ext = 50)
+  
+    tubulin_stacked <- stackObjects(body_objects, image_tubulin, ext = 50)
+
+#stackObjects will overlap the segmented images and the raw images, so that when the cell is chosen only the segmented nuclei in the DAPI image and the segmented cell body in the tubulin and actin images are displayed.
+#The argument ext is key as it defines the size of the output image. This makes sure that the images of different cells can be comparable in terms of size.
+    
+    dataframe <- dataframe %>% filter(field == as.numeric(field_number))
+    
+    for (i in sample(1:nrow(dataframe), size = 200, replace = FALSE)){
+      
+      cell_number <- which.min(sqrt((features[,"m.cx"]-dataframe$DNA.m.cx[i])^2+(features[,"m.cy"]-dataframe$DNA.m.cy[i])^2))
+      
+      data_features <- dataframe[i,]
+      
+#The cell number will be determined by computing which segmented cell has the more similar coordinates to the sampled cell.(In theory there will be only one match and the difference between them should be 0, nevertheless the EBImage package was updated after the feature calculation for the screen data, therefore the coordinates of the segmented cells differ slightly from the ones contained in the dataframe. This is the reason why is safer to use the function which.min, that will return the cell whose are more similar). 
+#It is important for each sampled cell to extract the corresponding row in the features dataframe. This is because after the user classifies the cell a new column will be added with the group name and a dataframe with all classified cells and the feature values will be generated at the end. This dataframe will constitute the training set based in which the Random forest will be trained. 
+      
+      # I need to correct the features before applying the filtering classifier and eventually copying the single cell object. 
+      
+      if(data_features$DNA.m.cx > 100 & data_features$DNA.m.cx < 1948 & 
+         data_features$DNA.m.cy > 100 & data_features$DNA.m.cy < 1948){
+        
+        for(column in numeric_features){
+    
+    #Since the tubulin texture features show a median of 0 and mad of 0, it makes no sense to Z-transform the values. For that reason, we will only glog       transform the corresponding values.
+    
+          if(list_mads[[screen]][[column]]>0){
+      
+            data_features[[column]] <- data_normalization(data_features[[column]], list_medians[[screen]][[column]], list_mads[[screen]][[column]])
+          
+          }else{
+      
+           data_features[[column]] <- glog(data_features[[column]], lambda = 1)
+      
+          }
+        }
+      
+        
+     # The raw data files do not contain the screen, well, plate and field info. Therefore we will have to add it. 
+      
+        data_features["number"] <- cell_number
+      
+        list_images <- list("dapi" = rgbImage(blue = (8*(nuclei_stacked[,,cell_number]))),
+                            "actin" = rgbImage(red = (6*(actin_stacked[,,cell_number]))),
+                            "tubulin" = rgbImage(green = (20*(tubulin_stacked[,,cell_number]))),
+                            "dapi_raw" = rgbImage(blue = 8*image_dapi[(data_features$DNA.m.cx-50):(data_features$DNA.m.cx+50),
+                                                                    (data_features$DNA.m.cy -50):(data_features$DNA.m.cy+50)]),
+                            "actin_raw" = rgbImage(red = 6*image_actin[(data_features$DNA.m.cx-50):(data_features$DNA.m.cx+50),
+                                                                    (data_features$DNA.m.cy-50):(data_features$DNA.m.cy+50)]),
+                            "tubulin_raw" = rgbImage(green = 20*image_tubulin[(data_features$DNA.m.cx-50):(data_features$DNA.m.cx+50),
+                                                                    (data_features$DNA.m.cy-50):(data_features$DNA.m.cy+50)]),
+                            "dapi_field" = rgbImage(blue = 8*image_dapi[(data_features$DNA.m.cx-100):(data_features$DNA.m.cx+100),
+                                                                    (data_features$DNA.m.cy -100):(data_features$DNA.m.cy+100)]),
+                            "actin_field" = rgbImage(red = 6*image_actin[(data_features$DNA.m.cx-100):(data_features$DNA.m.cx+100),
+                                                                    (data_features$DNA.m.cy-100):(data_features$DNA.m.cy+100)]),
+                            "tubulin_field" = rgbImage(green = 20*image_tubulin[(data_features$DNA.m.cx-100):(data_features$DNA.m.cx+100),
+                                                                    (data_features$DNA.m.cy-100):(data_features$DNA.m.cy+100)]),
+                            
+                            "features" = data_features)
+      #We save the segmented and cropped channeled images and also the cropped and raw images. 
+      #Field images are centered around the image of interest but show a bigger field of view. 
+      #Features corresponds to the cell features, plus the number. 
+        
+        
+        saveRDS(list_images, file = paste0("single_cell_images/", file, "_",cell_number, ".rds"))
+        
+      #I will save each list for every single cell in an individual rds file. That is the reason why we add the cell number at the end. 
+      
+      }
+      
+    }
+}
+
+load("raw_images_files/ERC_20x_4t_SYNA_1010_S027_A24_3_single_cell.RData")
+
+example_dataframe <- cell_features
+
+get_single_cell_image(example_segm[[2]], example_dataframe, example_segm[[1]], example_segm[[3]], example_dapi, example_actin, example_tubulin, "S027",
+                                             "3", "ERC_20x_4t_SYNA_1010_S027_A24_3", list_medians, list_mads)
+
+# We will make a list with the images of the cells and the row corresponding to the features. For each cell we will create a separate file. That will avoid loading a very large object into the R space. The name of the file with the images and data will be the same as the file name.
+
+display(tile(EBImage::combine((readRDS("single_cell_images/ERC_20x_4t_SYNA_1010_S027_A24_3_769.rds")[7:9])), nx = 3))
+
+
+```
+###Global function
+```{r}
+
+image_single_cell <- function(file, list_medians, list_mads){
+  
+  folder <- "raw_images_files/"
+  
+  #The folder corresponds to the place where all images and RData files are stored. 
+  
+  screen = str_split(file, pattern = "_")[[1]][[6]]
+  
+  field <- str_split(file, pattern = "_")[[1]][[8]]
+    
+  load(paste0(folder, file, "_single_cell.RData"))
+       
+  data <- as.data.frame(cell_features) 
+    
+  dapi_image <- readImage(paste0(folder, file,"_DAPI.tif"))
+
+  actin_image <- readImage(paste0(folder, file, "_Cy3.tif"))
+
+  tubulin_image <- readImage(paste0(folder, file, "_FITC.tif"))
+  
+  norm_images <- normalise_images(dapi_image,actin_image,tubulin_image)
+  
+  tresh_images <- treshold_images(norm_images$norm_dapi, norm_images$norm_actin, norm_images$norm_tubulin)
+  
+  get_single_cell_image(tresh_images$nuclei_features, data, tresh_images$nuclei_objects, tresh_images$body_objects, dapi_image,actin_image, tubulin_image,
+                        screen, field, file, list_medians, list_mads)
+  
+  #The global function runs all the small functions defined before. The process ends up with the generation of a file per cell which contains the segmented image in the dapi, actin and tubulin channels and also the raw image around the cell of interest also in the three channels. The last item on the list contains the raw features. 
+  
+}
+
+#save(get_single_cell_image, image_single_cell, normalise_images, treshold_images, file ="objects/single_cell_image_new_functions.RData")
+
+image_single_cell("ERC_20x_4t_SYNA_1001_S067_B22_3", list_medians, list_mads)
+
+
+#The data that I took from the database is saved a bit differently. That is why I will write a second global function with some modifications. 
+
+image_single_cell_no_field <- function(file, list_medians, list_mads){
+  
+  folder <- "raw_images_files/"
+  
+  #The folder corresponds to the place where all images and RData files are stored. 
+  
+  screen = str_split(file, pattern = "_")[[1]][[6]]
+  
+  field <- str_split(file, pattern = "_")[[1]][[8]]
+    
+  load(paste0(folder,substr(file, 1, nchar(file)-2), "_single_cell.RData"))
+       
+  data <- as.data.frame(data_well) 
+    
+  dapi_image <- readImage(paste0(folder, file,"_DAPI.tif"))
+
+  actin_image <- readImage(paste0(folder, file, "_Cy3.tif"))
+
+  tubulin_image <- readImage(paste0(folder, file, "_FITC.tif"))
+  
+  norm_images <- normalise_images(dapi_image,actin_image,tubulin_image)
+  
+  tresh_images <- treshold_images(norm_images$norm_dapi, norm_images$norm_actin, norm_images$norm_tubulin)
+  
+  get_single_cell_image(tresh_images$nuclei_features, data, tresh_images$nuclei_objects, tresh_images$body_objects, dapi_image,actin_image, tubulin_image,
+                        screen, field, file, list_medians, list_mads)
+  
+  #The global function runs all the small functions defined before. The process ends up with the generation of a file per cell which contains the segmented image in the dapi, actin and tubulin channels and also the raw image around the cell of interest also in the three channels. The last item on the list contains the raw features. 
+  
+}
+
+
+
+```
+#Loop images
+Here I will make a for loop to extract single cell images from different screens. There are some screens with low quality control. Therefore, they will be exlcuded and no single cell images will be extracted from them. I do not have scale factors for all screens because, for S180 until S233 it took very very long to load them into from the database. This is the reason only cells from S001 to S180 will be retrieved. 
+```{r}
+
+names(list_medians)
+
+#There are 159 screens from which scale factors are computed and the general quality control was good. 
+
+good_qc_screens <- query_genes %>% separate(plate_barcode, into = c("barcode", "screen"), sep = "_") %>% 
+                    filter(qc_general == T, screen %in% names(list_medians)) %>% pull(screen)
+
+pb <- txtProgressBar(min = 0, max = 969, style = 3)
+
+count <- 0
+
+for (image in list.files(raw_images_folder, pattern = "DAPI")[85:969]){
+  
+  count <- count + 1
+  
+  setTxtProgressBar(pb, count)
+  
+  if(str_split(image, pattern = "_")[[1]][[6]] %in% good_qc_screens){
+    
+    if(!is.na(list_mads[[str_split(image, pattern = "_")[[1]][[6]]]][["dist.10.nn"]])){
+      
+      image <- substr(image, 1, nchar(image)-9)
+    
+      if(paste0(image, "_single_cell.RData") %in% list.files(raw_images_folder, pattern = "RData")){
+      
+        image_single_cell(image, list_medians, list_mads)  
+      
+      }else if(paste0(substr(image, 1, nchar(image)-2), "_single_cell.RData") %in% list.files(raw_images_folder, pattern = "RData")){
+      
+        image_single_cell_no_field(image, list_medians, list_mads)
+      
+      
+      }
+    }
+  }
+}
+
+```
+
+

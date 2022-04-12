@@ -38,3 +38,21 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 wet-lab-data-scripts/CSN_CDK_CG3847
+irgnore_on_github/
+Figure_2/Figure_2S2/data/2S2_A-B_cons_functional_groups_all_datasets_image.RData
+Figure_2/Figure_2S2/data/2S2_C-D_internal_vs_external_table_fly_yeast_human_genegroups_image.RData
+Figure_2/Figure_2S2/data/2S2_E-F_hclustering_fly_human_image.RData
+Figure_2/processed_data/Figure_2_B_2S1.RData
+*imagery*
+Figure_4/objects/activesession_UMAP.RData
+Figure_6/source_data/data_object_filtered_together-PC1.rds
+*czi*
+*interactions_stats_*
+*relevant*
+*workspace*
+Figure_4/objects/aggregated_norm_cell_count.rds
+Figure_4/objects/aggregated_norm_cells_good_queries.rds
+Figure_4/objects/grp_interactions_norm_cells_130320.rds
+Figure_4/objects/norm_count_groups_tidy.rds
+Figure_5/objects/grp_interactions_norm_cells_130320.rds
+Figure_2/graphics/figure_2B/hclustering_filtering_datasets.html

@@ -1,0 +1,387 @@
+---
+title: "model_testing"
+author: "Sergi"
+date: "12/16/2019"
+output: pdf_document
+abstract: In the previous markdown I have developed a random forest which classifies cells according the local cell crowding into crowded and isolated. The accuracy of the algorithm was quite high, around 90 %. In this markdown I will apply the classifier to the syngene screen and also make a cross-comparisons with the density classifier developed for the time-resolved pipeline. 
+editor_options: 
+  chunk_output_type: console
+---
+#Package loading
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(randomForest)
+library(EBImage)
+library(e1071)
+library(plotly)
+library(Rtsne)
+library(jsonlite)
+library(RSQLite)
+library(LMGene)
+library(gridExtra)
+library(ggpubr)
+library(uwot)
+library(pryr)
+library(data.table)
+library(dtplyr)
+library(patchwork)
+library(ggrepel)
+
+density_classifier <- readRDS("objects_classification/classifiers/density_classifier.rds")
+
+filtering_classifier <- readRDS("objects/filtering_classifier.rds")
+
+```
+#Subsample
+I retrieved a subsample of cells from the syngene screen comprising around 2 million single cells. There is one plate from screens S001 to S175. From each plate 6 wells were selected and 2000 cells sampled from each. The subsample was processed following the same steps as the training set.
+##Classification
+```{r}
+
+#I have to rule out cells which are at the edges of the image.
+
+subsample_syngene <- read_csv("model_testing/subsample_processed_features.csv", col_names = T, col_types = cols(plate = col_character())) %>% 
+                            filter(DNA.m.cx > 100 & DNA.m.cx < 1948 & DNA.m.cy > 100 & DNA.m.cy < 1948) 
+
+#Wrongly segmented cells are also ruled out using the segmentation classifier developed in the previous project. 
+
+subsample_syngene["good_segm"] <- predict(filtering_classifier, subsample_syngene)
+
+#Cell density classification
+
+subsample_syngene_filt <- subsample_syngene %>% filter(good_segm == "Yes") 
+
+subsample_syngene_filt["context"] <- predict(density_classifier, subsample_syngene_filt)
+
+#Global numbers by group
+
+count(subsample_syngene_filt, "context")
+
+#Surprisingly there are 54 % of the cells labelled as crowded and 46 % as isolated. I would have expected a lower number of isolated cells. 
+
+```
+##Proportions by well
+I would like to show the proportion of cells according to the local cell density by well. It would be interesting to determine which conditions result in a very high proportion of isolated cells for instance. 
+```{r}
+
+#Data aggregation
+
+dot_plot_data <- subsample_syngene_filt %>% select(screen, plate, well, context) %>% unite("id", screen, plate, well, sep = "_")
+                    
+list_conditions <- list()
+
+pb <- txtProgressBar(min = 0, max = length(unique(dot_plot_data$id))*2, style = 3)
+
+count <- 0
+
+for (unique_id in unique(dot_plot_data$id)){
+  for(type in c("Crowded", "Isolated")){
+    
+    count <- count+1
+    
+    setTxtProgressBar(pb, count)
+    
+    data <- dot_plot_data %>% filter(id == unique_id, context == type)
+  
+    if(nrow(data)>0){
+  
+      data <- tibble(id = unique_id, context = type, proportion = rep(nrow(data)/nrow(dot_plot_data %>% filter(id == unique_id))), n_cells = nrow(data)) %>% 
+                separate(id, into = c("screen", "plate", "well"), sep = "_")
+      
+      if(str_split(data$well, "")[[1]][2]== "0"){
+        
+        data$well <- paste0(str_split(data$well, "")[[1]][1], str_split(data$well, "")[[1]][3])
+        
+      }
+      
+      #I would like to add the query and target names to the data frame so that they can be added as labels on the dot plot. 
+      
+      list_conditions[[paste0(unique_id, type)]] <- data %>% mutate(query = query_genes %>% filter(screen == data$screen) %>% pull(query_name),
+                                                      target = target_genes %>% filter(plate == data$plate, well == data$well) %>% pull(gene_symbol))
+    
+    }else{
+      
+      data <- tibble(id = unique_id, context = type, proportion = 0, n_cells = 0) %>% separate(id, into = c("screen", "plate", "well"), sep = "_")
+      
+      if(str_split(data$well, "")[[1]][2]== "0"){
+        
+        data$well <- paste0(str_split(data$well, "")[[1]][1], str_split(data$well, "")[[1]][3])
+        
+      }
+      
+      list_conditions[[paste0(unique_id, type)]] <- data %>% mutate(query = query_genes %>% filter(screen == data$screen) %>% pull(query_name),
+                                                      target = target_genes %>% filter(plate == data$plate, well == data$well) %>% pull(gene_symbol))
+    
+    }
+  }
+}
+
+dot_plot_prop <- do.call("rbind", list_conditions) %>% unite(gene_pair, query, target, sep = "_")
+
+#Dot plot
+
+#Since I will use geom_jitter to plot the points I need to save and fix the position of them so that I can add later on the label on the point exactly. 
+
+pos <- position_jitter(seed = 1)
+
+load("~/Desktop/Sergi_master_thesis/themes/bar_plot_theme.RData")
+
+  dot_plot_syngene <- ggplot(dot_plot_prop, aes(x = context, y = proportion, colour = context, label = gene_pair))+
+                      geom_point(position = pos)+
+                      stat_summary(fun.y = mean, fun.ymin = mean, fun.ymax = mean, geom = "crossbar", width = 0.25, colour = "black")+
+                      bar_plot_theme()+
+                      ylab("Proportion of cells")+
+                      scale_color_manual(values = c(colours))+
+                      theme(plot.title = element_text(size = 26, hjust = 0.5))+
+                      guides(colour = guide_legend(nrow = 1, override.aes = list(size = 6)))+
+                      ggtitle("Syngene screen")+
+                      labs(colour = "Local density")
+                      #geom_label(data = dot_plot_prop %>% filter(context == "Crowded", proportion >0.85), position = pos, size = 3)+
+                      #geom_label_repel(data = dot_plot_prop %>% filter(context == "Isolated", proportion ==1), position = pos, size = 3)
+
+#There are conditions in which only isolted cells are obtained. Looking at the median proportions, we find that 2/3 of the cells are in crowded areas and 1/3 is labelled as isolated. 
+
+ggsave(dot_plot_syngene, filename = "model_testing/plots/dot_plot_well_syngene.pdf")
+
+```
+#Time-resolved subsample
+I want to compare the density classifiers of the present screen and the time-resolved experiment. Here I will use the density algorithm developed for the time-resolved screen pipeline. I will applied to a subsample of the data which includes cells from all screens. More specifically, 6 random plates and 20 random wells were selected from which 1000 cells were copied by condition. This gives rise to data from two replicates of 420 different conditions. 
+##Classification
+```{r}
+
+density_classifier_time <- readRDS("model_testing/final_rf_density_classifier_time.rds")
+
+#Ruling out cells at the edges
+
+subsample_time_screen <- readRDS("model_testing/subsample_time_screen.rds") %>% filter(DNA.m.cx > 100 & DNA.m.cx < 1948 & DNA.m.cy > 100 & DNA.m.cy < 1948)
+
+#Eliminate wrongly segmented cells
+
+subsample_time_filt <- subsample_time_screen %>% filter(predict(filtering_classifier_time, subsample_time_screen) == "Yes")
+
+#Classification based on local cell crowding
+
+subsample_time_filt <- subsample_time_filt %>% mutate(context = predict(density_classifier_time, subsample_time_filt))
+
+#There are almost as many crowded cells as isolated cells. 
+
+count(subsample_time_filt, "context")
+
+```
+##Proportions by well
+I will compute group proportions by well to see the distribution under different conditions. 
+```{r}
+#Gene annotation time-resolved screen
+
+load("~/Desktop/Sergi_master_thesis/gene_annotation/gene_annotation_time_resolved_data.RData")
+
+#Data aggregation
+
+dot_plot_data_time <- subsample_time_filt %>% select(screen, plate, well, context) %>% unite("id", screen, plate, well, sep = "_")
+                    
+list_conditions <- list()
+
+pb <- txtProgressBar(min = 0, max = length(unique(dot_plot_data_time$id))*2, style = 3)
+
+count <- 0
+
+for (unique_id in unique(dot_plot_data_time$id)){
+  for(type in c("Crowded", "Isolated")){
+    
+    count <- count+1
+    
+    setTxtProgressBar(pb, count)
+    
+    data <- dot_plot_data_time %>% filter(id == unique_id, context == type)
+  
+    if(nrow(data)>0){
+  
+      data <- tibble(id = unique_id, context = type, proportion = rep(nrow(data)/nrow(dot_plot_data_time %>% filter(id == unique_id))), n_cells = nrow(data)) %>% 
+                separate(id, into = c("screen", "plate", "well"), sep = "_")
+      
+
+      #I would like to add the query and target names to the data frame so that they can be added as labels on the dot plot. 
+      
+      list_conditions[[paste0(unique_id, type)]] <- data %>% mutate(query = query_mappin %>% filter(V2 == data$plate) %>% pull(V3),
+                                                      target = target_mappin %>% filter(V2 == data$well) %>% pull(V3))
+    
+    }else{
+      
+      data <- tibble(id = unique_id, context = type, proportion = 0, n_cells = 0) %>% separate(id, into = c("screen", "plate", "well"), sep = "_")
+      
+      list_conditions[[paste0(unique_id, type)]] <- data %>% mutate(query = query_mappin %>% filter(V2 == data$plate) %>% pull(V3),
+                                                      target = target_mappin %>% filter(V2 == data$well) %>% pull(V3))
+    
+    }
+  }
+}
+
+dot_plot_prop_time <- do.call("rbind", list_conditions) %>% unite(gene_pair, query, target, sep = "_") %>% 
+                        mutate(time = case_when(screen %in% c("S1", "S7") ~ "3 days",
+                                                screen %in% c("S2", "S8") ~ "4 days",
+                                                screen %in% c("S3", "S9") ~ "5 days"))
+
+#I would like to colour the dots by the time point, therefore I added a column with the time point at which cells were fixes and imaged. 
+
+#Dot plot
+
+netflix_red <- "#E50914"
+
+ikea_blue <- "#0051BA"
+  
+ikea_yellow <- "#FFDA1A"
+
+
+dot_plot_time <- ggplot(dot_plot_prop_time, aes(x = context, y = proportion, colour = time, label = gene_pair))+
+                      geom_point(position = pos)+
+                      stat_summary(fun.y = mean, fun.ymin = mean, fun.ymax = mean, geom = "crossbar", width = 0.25, colour = "black")+
+                      bar_plot_theme()+
+                      ylab("Proportion of cells")+
+                      scale_color_manual(values = c(netflix_red, ikea_blue, ikea_yellow))+
+                      theme(legend.title = element_blank(),
+                            plot.title = element_text(size = 26, hjust = 0.5))+
+                      guides(colour = guide_legend(nrow = 1, override.aes = list(size = 6)))+
+                      ggtitle("Time-resolved screen")
+                      #geom_label(data = dot_plot_prop %>% filter(context == "Crowded", proportion >0.85), position = pos, size = 3)+
+                      #geom_label_repel(data = dot_plot_prop %>% filter(context == "Isolated", proportion ==1), position = pos, size = 3)
+
+#As expected conditions 4 and 5 days after RNA treatment result in mostly crowded cells, while the opposite holds true for conditions after 3 days of treatment. 
+
+ggsave(dot_plot_time, filename = "model_testing/plots/dot_plot_well_time.pdf")
+
+```
+#Cross-comparisons
+We are interested in determining how well can we transfer a model from one dataset to the other one. For that I will apply each model to the dataset in which it was not trained. 
+##Time-resolved screen
+```{r}
+
+# Time-resolved screen.
+
+subsample_time_filt <- subsample_time_filt %>% mutate(cross_context = predict(density_classifier, subsample_time_filt)) %>% 
+                        mutate(match_context = if_else(context == cross_context, "Match", "No match"))
+
+count(subsample_time_filt, "match_context")
+
+#There is a match in the predictions for 92 % of the cells. 
+
+stacked_time_data <- rbind(count(subsample_time_filt, "match_context") %>% as.data.frame() %>% mutate(type = rep("cross_comparison")),
+                           count(subsample_time_filt, "context") %>% as.data.frame() %>% dplyr::rename(match_context = context) %>% 
+                             mutate(type = rep("time_algorithm")),
+                           count(subsample_time_filt, "cross_context") %>% as.data.frame() %>% dplyr::rename(match_context = cross_context) %>% 
+                             mutate(type = rep("syngene_algorithm"))) %>% dplyr::rename(value = match_context) %>% group_by(type) %>% 
+                        mutate(proportion = freq/sum(freq)) %>% ungroup()
+
+#I will make two separate stacked bar plots, one which show the cross-comparison among the models, and the other one which shows the proportion of good and bad segmented cells given by every classifier. 
+
+#Model matching
+
+amazon_orange <- "#FF9900"
+
+amazon_blue <- "#146eb4" 
+
+stacked_cross_comparison <- ggplot(stacked_time_data %>% filter(type == "cross_comparison"), aes(x = type, y = proportion, 
+                                                                                                 fill = factor(value, levels = c("No match", "Match")),
+                                                                                                 label = round(proportion, 2)))+
+                              geom_bar(stat = "identity", position = "stack")+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19),
+                                    axis.ticks.x = element_blank())+
+                              guides(fill = guide_legend(nrow = 1, override.aes = list(size = 3), title.position = "top", title.hjust = 0.5, reverse = T))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1))+
+                              scale_fill_manual(values = c(amazon_orange, amazon_blue))+
+                              labs(fill = "Model comparison")+
+                              ylab("Proportion of cells")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+
+#Group proportions         
+
+stacked_prop_time <- ggplot(stacked_time_data %>% filter(type != "cross_comparison"), aes(x = type, y = proportion, 
+                                                                                                 fill = factor(value, levels = c("Crowded", "Isolated")),
+                                                                                                 label = round(proportion, 2)))+
+                              geom_bar(stat = "identity", position = "stack", width = 0.75)+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19), 
+                                    axis.text.y = element_blank(),
+                                    axis.title.y = element_blank(),
+                                    axis.ticks.y = element_blank(),
+                                    axis.line.y = element_blank(),
+                                    axis.ticks.x = element_blank())+
+                              guides(fill = guide_legend(nrow = 1, override.aes = list(size = 5), title.position = "top", title.hjust = 0.5))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1))+
+                              scale_fill_manual(values = c(google_red, google_green))+
+                              labs(fill = "Local density")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+arranged_stack_time <- stacked_cross_comparison + stacked_prop_time + 
+                          plot_annotation(title = "Time-resolved screen", theme = theme(plot.title = element_text(size = 26, hjust = 0.5)))+
+                            plot_layout(widths = c(1,2))
+                             
+ggsave(arranged_stack_time, filename = "model_testing/plots/model_comparison_time_screen.pdf", width = 9) 
+
+
+```
+##Large-scale screen
+```{r}
+
+subsample_syngene_filt <- subsample_syngene_filt %>% mutate(cross_context = predict(density_classifier_time, subsample_syngene_filt)) %>% 
+                            mutate(match_context = if_else(context == cross_context, "Match", "No match"))
+
+#The match is around  89 %
+
+stacked_syngene_data <- rbind(count(subsample_syngene_filt, "match_context") %>% as.data.frame() %>% mutate(type = rep("cross_comparison")),
+                           count(subsample_syngene_filt, "context") %>% as.data.frame() %>% dplyr::rename(match_context = context) %>% 
+                             mutate(type = rep("syngene_algorithm")),
+                           count(subsample_syngene_filt, "cross_context") %>% as.data.frame() %>% dplyr::rename(match_context = cross_context) %>% 
+                             mutate(type = rep("time_algorithm"))) %>% dplyr::rename(value = match_context) %>% group_by(type) %>% 
+                        mutate(proportion = freq/sum(freq)) %>% ungroup()
+
+
+#Model matching
+
+stacked_cross_comp_syngene <- ggplot(stacked_syngene_data %>% filter(type == "cross_comparison"), aes(x = type, y = proportion, 
+                                                                                                 fill = factor(value, levels = c("No match", "Match")),
+                                                                                                 label = round(proportion, 2)))+
+                              geom_bar(stat = "identity", position = "stack")+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19),
+                                    axis.ticks.x = element_blank())+
+                              guides(fill = guide_legend(nrow = 1, override.aes = list(size = 3), title.position = "top", title.hjust = 0.5, reverse = T))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1))+
+                              scale_fill_manual(values = c(amazon_orange, amazon_blue))+
+                              labs(fill = "Model comparison")+
+                              ylab("Proportion of cells")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+
+#Group proportions         
+
+stacked_prop_syngene <- ggplot(stacked_syngene_data %>% filter(type != "cross_comparison"), aes(x = type, y = proportion, 
+                                                                                                 fill = factor(value, levels = c("Crowded", "Isolated")),
+                                                                                                 label = round(proportion, 2)))+
+                              geom_bar(stat = "identity", position = "stack", width = 0.75)+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19), 
+                                    axis.text.y = element_blank(),
+                                    axis.title.y = element_blank(),
+                                    axis.ticks.y = element_blank(),
+                                    axis.line.y = element_blank(),
+                                    axis.ticks.x = element_blank())+
+                              guides(fill = guide_legend(nrow = 1, override.aes = list(size = 5), title.position = "top", title.hjust = 0.5))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1))+
+                              scale_fill_manual(values = c(google_red, google_green))+
+                              labs(fill = "Local density")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+arranged_stack_syngene <- stacked_cross_comp_syngene + stacked_prop_syngene + 
+                          plot_annotation(title = "Syngene screen", theme = theme(plot.title = element_text(size = 26, hjust = 0.5)))+
+                            plot_layout(widths = c(1,2))
+                             
+ggsave(arranged_stack_syngene, filename = "model_testing/plots/model_comparison_large_screen.pdf", width = 9) 
+
+
+```

@@ -1,0 +1,221 @@
+---
+title: "SYNGENE_analysis_correlation_analysis"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## SETUP
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggpubr)
+library(PRROC)
+library(ggrastr)
+library(patchwork)
+library(ggrepel)
+library(MASS)
+```
+
+## Loading cell number data 
+
+```{r}
+usable_features<-readRDS("processed_data/usable_features_18112019.rds")
+main_effects_df <- read_rds("processed_data/main_effect_df_181119.rds")
+interaction_vecs<-read_rds("processed_data/interactions_stats_all_feats_df_18112019.rds")
+translator<-read_delim("annotations/translator.txt",delim = "\t")
+
+interaction_vecs %<>% left_join(translator) %>% filter(feature %in% usable_features)
+main_effects_df %<>% left_join(translator) %>% filter(feature %in% usable_features)
+interaction_stats<-interaction_vecs %>% filter(feature=="cells")
+```
+
+# get the annotations for safe and all other benchmarks and training (GO terms, gene groups and protein complexes) based on gene_symbol
+
+```{R } 
+
+genes_to_ids<- translator %>% dplyr::select(current_fbgn=converted_id,current_symbol,targetid)
+
+genes_to_GO<-read_delim("annotations/gene_information.txt",delim="\t") %>% dplyr::select(go_id,current_fbgn=fbgn)
+
+GO_to_words<-read_delim("annotations/goterms.txt",delim = "\t")
+
+genes_to_genegroups<-read_delim("annotations/gene_group_data_fb_2019_02_mod.tsv",delim = "\t") %>% dplyr::select(gene_group=FB_group_name,current_symbol=Group_member_FB_gene_symbol,current_fbgn=Group_member_FB_gene_id)
+
+load("annotations/Complexes_from_paper.RData")
+
+gene_group_LUT<-genes_to_genegroups %>% split(.$current_symbol)
+
+gene_GO_LUT<-genes_to_ids %>% left_join(genes_to_GO) %>% dplyr::select(current_symbol,go_id) %>% distinct() %>% split(.$current_symbol)
+
+complex_LUT<-complexes %>% ungroup() %>% dplyr::select(current_fbgn=member,complex) %>% left_join(genes_to_ids) %>% dplyr::select(current_symbol,complex) %>% split(.$current_symbol)
+
+genes_to_ids %>% 
+  left_join(genes_to_GO) %>% 
+  left_join(GO_to_words) %>% 
+  dplyr::select(current_fbgn,current_symbol,targetid,go_term) %>% 
+  distinct() %>% mutate(current_fbgn=1) %>% 
+  spread(go_term,current_fbgn,fill=0) %>% 
+  dplyr::select(-targetid) %>% 
+  write_delim("annotations/SAFE_format_GO.txt",delim="\t")
+
+genes_to_ids %>% 
+  left_join(genes_to_genegroups) %>% 
+  dplyr::select(current_fbgn,current_symbol,targetid,gene_group) %>% 
+  distinct() %>% 
+  mutate(current_fbgn=1) %>% 
+  spread(gene_group,current_fbgn,fill=0) %>% 
+  dplyr::select(-targetid) %>% 
+  write_delim("annotations/SAFE_format_GG.txt",delim="\t")
+```
+
+## Figure 1E
+
+Plotting a global interaction profile correlation based network
+
+  # Compute all pair-wise GI profile correlations using pearson correlation
+
+```{r}
+GI_corrs<-interaction_vecs %>% 
+  filter(feature=="cells") %>%
+  unite(current_symbol,current_symbol,targetid,sep="öö") %>% 
+  dplyr::select(query_name,mpi,current_symbol) %>% 
+  spread(current_symbol,mpi) %>%
+  dplyr::select(-query_name) %>%
+  corrr::correlate(method = "p",use="p") %>%
+  corrr::shave() %>%
+  corrr::stretch() %>%
+  drop_na()
+
+GI_corrs %>%
+  filter(r>0.45) %>%
+  separate(x,c("genex","idx"),sep = "öö")%>%
+  separate(y,c("geney","idy"),sep = "öö") %>%
+  dplyr::select(genex,geney,idx,idy,r) %>%
+  write_delim("processed_data/correlation_table_simple_0.45_filtered_genes_v4.txt",delim = "\t")
+
+
+corr_filter<-function(gene){
+  GI_corrs %>% 
+    ungroup() %>%
+    filter(r>0.3,(x==gene | y==gene)) %>%
+    arrange(desc(r)) %>% 
+    head(n=3) %>% 
+    return()
+}
+
+all_genes<-c(GI_corrs$x,GI_corrs$y) %>% unique()
+
+filtered_corrs<-lapply(all_genes, corr_filter)
+
+filtered_corrs<-bind_rows(filtered_corrs) %>% distinct()
+
+filtered_corrs %<>%
+  separate(x,c("genex","idx"),sep = "öö")%>%
+  separate(y,c("geney","idy"),sep = "öö") %>%
+  dplyr::select(genex,geney,idx,idy,r)
+
+
+write_delim(x = filtered_corrs,"processed_data/correlation_table_pan_0.3_first3_filtered_genes_v3.txt",delim = "\t")
+
+```
+
+## extra get combined corrs
+
+```{r}
+
+combined_corrs<-interaction_vecs %>% 
+  unite(current_symbol,current_symbol,targetid,sep = 'öö') %>% 
+  unite(query_name,query_name,feature) %>%
+  dplyr::select(value=mpi,current_symbol,query_name) %>%
+  distinct() %>%
+  spread(current_symbol,value) %>%
+  dplyr::select(-query_name) %>%
+  corrr::correlate(method = "p",use="p") %>%
+  corrr::shave() %>%
+  corrr::stretch() %>%
+  drop_na()
+
+filtered_combined_corrs<-combined_corrs %>% 
+    ungroup() %>%
+    filter(r>0.2)
+
+corr_filter<-function(gene){
+  filtered_combined_corrs %>% 
+    filter(x==gene | y==gene) %>%
+    arrange(desc(r)) %>% 
+    head(n=3) %>% 
+    return()
+}
+
+all_genes<-c(combined_corrs$x,combined_corrs$y) %>% unique()
+
+filtered_combined_corrs<-lapply(all_genes, corr_filter)
+
+filtered_combined_corrs<-bind_rows(filtered_combined_corrs) %>% distinct()
+
+filtered_combined_corrs %<>%
+  separate(x,c("genex","idx"),sep = "öö")%>%
+  separate(y,c("geney","idy"),sep = "öö") %>%
+  dplyr::select(genex,geney,r)
+
+write_delim(x = filtered_combined_corrs,"processed_data/correlation_table_pan_combined_0.2_first3_v2.txt",delim = "\t")
+
+combined_corrs %>%
+  filter(r>0.3) %>%
+  separate(x,c("genex","idx"),sep = "öö")%>%
+  separate(y,c("geney","idy"),sep = "öö") %>%
+  dplyr::select(genex,geney,r) %>%
+  write_delim("processed_data/correlation_comb_table_simple_0.3.txt",delim = "\t")
+
+
+```
+
+## Main effect correlations
+
+```{r cars}
+
+feature_corrs<-main_effects_df %>% 
+  unite(current_symbol,current_symbol,targetid,sep='öö') %>% 
+  dplyr::select(feature,value,current_symbol) %>%
+  distinct() %>%
+  spread(current_symbol,value) %>%
+  dplyr::select(-feature) %>%
+  corrr::correlate(method = "p",use="p") %>%
+  corrr::shave() %>%
+  corrr::stretch() %>%
+  drop_na()
+
+
+corr_filter<-function(gene){
+  feature_corrs %>% 
+    ungroup() %>%
+    filter(r>0.3,(x==gene | y==gene)) %>%
+    arrange(desc(r)) %>% 
+    head(n=3) %>% 
+    return()
+}
+
+all_genes<-c(feature_corrs$x,feature_corrs$y) %>% unique()
+
+filtered_feature_corrs<-lapply(all_genes, corr_filter)
+
+filtered_feature_corrs<-bind_rows(filtered_feature_corrs) %>% distinct()
+
+filtered_feature_corrs %<>%
+  separate(x,c("genex","idx"),sep = "öö")%>%
+  separate(y,c("geney","idy"),sep = "öö") %>%
+  dplyr::select(genex,geney,r)
+
+
+write_delim(x = filtered_feature_corrs,"processed_data/correlation_feat_table_pan_0.3_first2.txt",delim = "\t")
+
+feature_corrs %>%
+  filter(r>0.9) %>%
+  separate(x,c("genex","idx"),sep = "öö")%>%
+  separate(y,c("geney","idy"),sep = "öö") %>%
+  dplyr::select(genex,geney,r) %>%
+  write_delim("processed_data/correlation_feat_table_simple_0.9.txt",delim = "\t")
+
+```
+

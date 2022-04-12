@@ -1,0 +1,338 @@
+Attribute Id	Attribute name	Domain Id
+6840	<NA>	2
+6331	Swr1 complex	3
+5147	R2TP complex	3
+2454	Ino80 complex	3
+563	box C/D snoRNP assembly	3
+426	ATP-dependent DNA helicase activity	3
+423	ATP-dependent 5'-3' DNA helicase activity	3
+2317	histone exchange	3
+6530	translation initiation factor binding	4
+1740	eukaryotic translation initiation factor 3 complex	4
+6529	translation initiation factor activity	4
+6541	translational initiation	4
+5396	regulation of innate immune response	5
+4439	positive regulation of defense response to virus by host	5
+4349	positive regulation of antibacterial peptide biosynthetic process	5
+1252	defense response to virus	5
+4311	poly(A)-specific ribonuclease activity	6
+3238	mRNA catabolic process	6
+713	CCR4-NOT core complex	6
+711	CCR4-NOT complex	6
+4030	P-body	6
+3852	nuclear-transcribed mRNA poly(A) tail shortening	6
+3647	negative regulation of translation	6
+6714	unfolded protein binding	7
+4900	protein folding	7
+905	chaperonin-containing T-complex	7
+433	ATP-dependent RNA helicase activity	8
+2913	maturation of SSU-rRNA from tricistronic rRNA transcript (SSU-rRNA, 5.8S rRNA, LSU-rRNA)	8
+6102	small-subunit processome	8
+5912	rRNA processing	8
+6381	t-UTP complex	8
+76	90S preribosome	8
+2911	maturation of LSU-rRNA from tricistronic rRNA transcript (SSU-rRNA, 5.8S rRNA, LSU-rRNA)	8
+3861	nucleolus	8
+4794	preribosome, large subunit precursor	8
+5799	ribosomal large subunit biogenesis	8
+3098	mitochondrial proton-transporting ATP synthase complex, coupling factor F(o)	9
+5078	proton transmembrane transport	9
+5082	proton-transporting ATP synthase activity, rotational mechanism	9
+418	ATP synthesis coupled proton transport	9
+3097	mitochondrial proton-transporting ATP synthase complex, catalytic core F(1)	9
+3066	mitochondrial electron transport, cytochrome c to oxygen	9
+1173	cytochrome-c oxidase activity	9
+3109	mitochondrial respiratory chain complex IV	9
+3103	mitochondrial respiratory chain complex I	9
+3067	mitochondrial electron transport, NADH to ubiquinone	9
+3358	NADH dehydrogenase activity	9
+2680	large ribosomal subunit	9
+3120	mitochondrial small ribosomal subunit	9
+3132	mitochondrion	9
+3124	mitochondrial translation	9
+3080	mitochondrial large ribosomal subunit	9
+5803	ribosomal small subunit assembly	10
+6281	structural constituent of ribosome	10
+6525	translation	10
+3775	nuclear chromosome	10
+5808	ribosome	10
+1199	cytoplasmic translation	10
+1225	cytosolic small ribosomal subunit	10
+1224	cytosolic ribosome	10
+1222	cytosolic large ribosomal subunit	10
+5797	ribosomal large subunit assembly	10
+5824	RNA binding	10
+3804	nuclear migration along microtubule	11
+476	axonal transport of mitochondrion	11
+459	axo-dendritic transport	11
+4968	protein localization to kinetochore	11
+3255	mRNA transport	11
+1498	dynactin complex	11
+875	centrosome localization	11
+462	axon cytoplasm	11
+5744	retrograde axonal transport	11
+4374	positive regulation of axonogenesis	11
+3038	microtubule-based movement	11
+2634	kinetochore organization	11
+1501	dynein complex binding	11
+872	centrosome	11
+1263	dendrite guidance	12
+731	cell dedifferentiation	12
+4707	positive regulation of transcription, DNA-templated	12
+425	ATP-dependent chromatin remodeling	12
+6330	SWI/SNF complex	12
+5915	RSC-type complex	12
+568	brahma complex	12
+3766	npBAF complex	12
+3373	nBAF complex	12
+6342	synaptic growth at neuromuscular junction	13
+5149	R3/R4 cell fate commitment	13
+3011	micropyle formation	13
+2425	imaginal disc-derived male genitalia morphogenesis	13
+2898	MAPK cascade	13
+6622	TSC1-TSC2 complex	14
+5706	response to nutrient	14
+5597	regulation of terminal button organization	14
+5507	regulation of phosphorylation	14
+4693	positive regulation of TORC2 signaling	14
+3638	negative regulation of TORC1 signaling	14
+3637	negative regulation of TOR signaling	14
+3567	negative regulation of organ growth	14
+3417	negative regulation of cell growth	14
+2739	lipid homeostasis	14
+2694	larval midgut histolysis	14
+2627	kinase binding	14
+935	cholesterol homeostasis	14
+806	cellular response to chloroquine	14
+6052	signal transduction	14
+4494	positive regulation of GTPase activity	14
+5836	RNA N6-methyladenosine methyltransferase complex	15
+3248	mRNA methylation	15
+6033	sex determination	15
+5882	RNA splicing, via transesterification reactions	15
+4812	primary sex determination, soma	15
+5216	regulation of alternative mRNA splicing, via spliceosome	15
+6654	U2-type prespliceosome	16
+6646	U12-type spliceosomal complex	16
+6189	spermatogenesis	16
+6645	U1 snRNP	16
+6222	spliceosomal snRNP assembly	16
+6661	U4/U6 x U5 tri-snRNP complex	16
+6219	spliceosomal complex	16
+5091	Prp19 complex	16
+6664	U5 snRNP	16
+6097	small nuclear ribonucleoprotein complex	16
+6649	U2 snRNP	16
+697	catalytic step 2 spliceosome	16
+4791	precatalytic spliceosome	16
+3253	mRNA splicing, via spliceosome	16
+4847	proteasome core complex, alpha-subunit complex	17
+4659	positive regulation of RNA polymerase II transcriptional preinitiation complex assembly	17
+4855	proteasome-activating ATPase activity	17
+4848	proteasome core complex, beta-subunit complex	17
+4853	proteasome regulatory particle, lid subcomplex	17
+436	ATPase activity	17
+4852	proteasome regulatory particle, base subcomplex	17
+4846	proteasome core complex	17
+4841	proteasomal ubiquitin-independent protein catabolic process	17
+4840	proteasomal protein catabolic process	17
+6441	threonine-type endopeptidase activity	17
+1586	endopeptidase activity	17
+4851	proteasome regulatory particle	17
+4856	proteasome-mediated ubiquitin-dependent protein catabolic process	17
+4845	proteasome complex	17
+3879	nucleosomal DNA binding	18
+3886	nucleosome positioning	18
+3448	negative regulation of DNA recombination	18
+3428	negative regulation of chromatin silencing	18
+1479	double-stranded DNA binding	18
+957	chromatin DNA binding	18
+3774	nuclear chromatin	18
+3880	nucleosome	19
+3881	nucleosome assembly	19
+2301	histone binding	19
+1430	DNA-templated transcription, initiation	19
+4904	protein heterodimerization activity	19
+6090	SLIK (SAGA-like) complex	20
+5931	SAGA complex	20
+5855	RNA polymerase II preinitiation complex assembly	20
+2291	histone acetyltransferase activity	20
+6483	transcription factor binding	20
+6486	transcription factor TFIID complex	20
+5853	RNA polymerase II general transcription initiation factor activity	20
+3016	microtubule binding	21
+1935	G1/S transition of mitotic cell cycle	21
+4529	positive regulation of JAK-STAT cascade	21
+1148	cyclin-dependent protein kinase holoenzyme complex	21
+1936	G2/M transition of mitotic cell cycle	21
+874	centrosome duplication	21
+2822	maintenance of protein location in cell	21
+4949	protein localization	21
+160	actomyosin contractile ring assembly	21
+1031	cleavage furrow	21
+3155	mitotic cytokinesis	21
+2631	kinetochore	21
+3172	mitotic sister chromatid segregation	21
+6214	spindle midzone	21
+2944	meiotic spindle midzone	22
+974	chromosome passenger complex	22
+2365	histone phosphorylation	22
+1578	endomitotic cell cycle	22
+5348	regulation of exit from mitosis	22
+3807	nuclear nucleosome	23
+2769	long-term memory	24
+2255	hemopoiesis	24
+6804	wing disc morphogenesis	24
+2434	immune response	24
+2281	hindgut morphogenesis	24
+2790	lysosome	25
+2199	Gtr1-Gtr2 GTPase complex	25
+1541	EGO complex	25
+799	cellular response to amino acid stimulus	25
+4691	positive regulation of TOR signaling	25
+2006	germ cell development	26
+1838	female germ-line stem cell population maintenance	26
+5032	protein stabilization	26
+4885	protein deneddylation	26
+2841	male germ-line cyst encapsulation	26
+2018	germarium-derived cystoblast division	26
+1086	COP9 signalosome	26
+4400	positive regulation of cell growth	27
+4372	positive regulation of axon guidance	27
+3398	negative regulation of autophagy	27
+2485	insulin receptor signaling pathway	27
+449	autolysosome	27
+2431	imaginal disc-derived wing morphogenesis	27
+4405	positive regulation of cell size	27
+3863	nucleoplasm	27
+1437	dolichyl-diphosphooligosaccharide-protein glycotransferase activity	27
+1569	encapsulation of foreign target	27
+752	cell projection	27
+115	actin cytoskeleton organization	27
+125	actin filament organization	27
+4530	positive regulation of JNK cascade	27
+1455	dorsal closure	27
+4304	pole plasm oskar mRNA localization	27
+1577	endomembrane system	27
+745	cell migration	27
+6465	tracheal outgrowth, open tracheal system	27
+3296	myoblast fusion	27
+3827	nuclear pore outer ring	27
+416	ATP hydrolysis coupled proton transport	27
+5084	proton-transporting ATPase activity, rotational mechanism	27
+4283	plasma membrane proton-transporting V-type ATPase complex	27
+6739	vacuolar proton-transporting V-type ATPase, V1 domain	27
+746	cell morphogenesis	27
+6750	vascular endothelial growth factor receptor signaling pathway	27
+560	border follicle cell migration	27
+4696	positive regulation of transcription by RNA polymerase II	28
+6496	transcription initiation from RNA polymerase II promoter	28
+6474	transcription coactivator activity	28
+3548	negative regulation of neuroblast proliferation	28
+5602	regulation of transcription by RNA polymerase II	28
+2919	mediator complex	28
+1102	core mediator complex	28
+6476	transcription coregulator activity	28
+5845	RNA polymerase II activity	28
+1428	DNA-directed 5'-3' RNA polymerase activity	28
+6472	transcription by RNA polymerase II	28
+5865	RNA polymerase II, core complex	28
+412	ATP binding	29
+1184	cytoplasm	29
+3902	nucleus	29
+4868	protein binding	29
+1220	cytosol	29
+4279	plasma membrane	29
+3510	negative regulation of insulin receptor signaling pathway	30
+1394	DNA replication	30
+3895	nucleotide-excision repair	30
+3144	mitotic cell cycle	30
+5197	recycling endosome	30
+4076	peptidoglycan recognition protein signaling pathway	30
+1066	compound eye development	30
+6068	single-stranded DNA binding	30
+1027	clathrin-coated vesicle	30
+5051	protein tyrosine phosphatase activity	30
+3465	negative regulation of ERK1 and ERK2 cascade	30
+1610	endosome	30
+6769	vesicle-mediated transport	30
+5159	Rab guanyl-nucleotide exchange factor activity	30
+6564	TRAPP complex	30
+6467	trans-Golgi network	30
+467	axon guidance	30
+2544	intracellular protein transport	30
+1012	clathrin adaptor activity	30
+332	AP-2 adaptor complex	30
+1574	endocytosis	30
+1487	dsRNA transport	30
+2153	Golgi apparatus	30
+1753	exocytosis	30
+2163	Golgi to plasma membrane protein transport	30
+3709	neuronal cell body	30
+1572	endocytic recycling	30
+1666	ER to Golgi vesicle-mediated transport	30
+2528	intra-Golgi vesicle-mediated transport	31
+2167	Golgi transport complex	31
+2160	Golgi organization	31
+5751	retrograde vesicle-mediated transport, Golgi to ER	31
+5413	regulation of lipid storage	32
+1088	COPI vesicle coat	32
+5620	regulation of tube diameter, open tracheal system	32
+2695	larval salivary gland morphogenesis	32
+2353	histone methyltransferase activity	33
+6658	U4 snRNA 3'-end processing	34
+3848	nuclear-transcribed mRNA catabolic process, exonucleolytic, 3'-5'	34
+1186	cytoplasmic exosome (RNase complex)	34
+4316	polyadenylation-dependent snoRNA 3'-end processing	34
+3787	nuclear exosome (RNase complex)	34
+1765	exosome (RNase complex)	34
+5908	rRNA catabolic process	34
+3806	nuclear mRNA surveillance	34
+5362	regulation of gene expression	34
+3818	nuclear polyadenylation-dependent tRNA catabolic process	34
+3815	nuclear polyadenylation-dependent rRNA catabolic process	34
+1760	exonucleolytic trimming to generate mature 3'-end of 5.8S rRNA from tricistronic rRNA transcript (SSU-rRNA, 5.8S rRNA, LSU-rRNA)	34
+1759	exonucleolytic nuclear-transcribed mRNA catabolic process involved in deadenylation-dependent decay	34
+3795	nuclear lamina	34
+6677	ubiquitin protein ligase activity	35
+4564	positive regulation of mitotic metaphase/anaphase transition	35
+286	anaphase-promoting complex-dependent catabolic process	35
+284	anaphase-promoting complex	35
+6672	ubiquitin activating enzyme binding	36
+6319	SUMO activating enzyme complex	36
+6318	SUMO activating enzyme activity	36
+5033	protein sumoylation	36
+4990	protein modification by small protein conjugation	36
+4690	positive regulation of Toll signaling pathway	36
+4583	positive regulation of NF-kappaB transcription factor activity	36
+4354	positive regulation of antimicrobial peptide production	36
+6508	transcriptionally active chromatin	37
+5847	RNA polymerase II complex binding	37
+715	Cdc73/Paf1 complex	37
+6478	transcription elongation factor complex	38
+5326	regulation of DNA-templated transcription in response to stress	38
+4914	protein import into nucleus	39
+3826	nuclear pore organization	40
+6280	structural constituent of nuclear pore	40
+3819	nuclear pore	41
+3796	nuclear localization sequence binding	41
+3782	nuclear envelope	41
+3586	negative regulation of protein export from nucleus	41
+6130	snRNA processing	42
+6126	snRNA 3'-end processing	42
+2506	integrator complex	42
+6061	Sin3-type complex	43
+3641	negative regulation of transcription by RNA polymerase II	43
+2306	histone deacetylation	43
+2303	histone deacetylase activity	43
+5294	regulation of circadian rhythm	44
+994	circadian behavior	44
+3249	mRNA polyadenylation	45
+3241	mRNA cleavage and polyadenylation specificity factor complex	45
+4785	pre-mRNA cleavage required for polyadenylation	45
+3229	mRNA 3'-end processing by stem-loop binding and cleavage	45
+3244	mRNA cleavage stimulating factor complex	45
+3820	nuclear pore central transport channel	46
+3767	NSL complex	47
+1047	cohesin complex	48
+973	chromosome organization	48

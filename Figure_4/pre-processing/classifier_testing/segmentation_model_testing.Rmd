@@ -1,0 +1,400 @@
+---
+title: "model_testing"
+author: "Sergi"
+date: "12/16/2019"
+output: pdf_document
+abstract: In the markdown, classifier_development.Rmd, I have trained a random forest on a cleaned training set. The overall accuracy of the model was 77 %. Here I will apply the classifier to a subset of cells from the large-scale screen. Furthermore I will carry out cross-comparison between the filtering classifiers of the time-resolved screen pipeline and the one currently being developed.  
+editor_options: 
+  chunk_output_type: console
+---
+#Package loading
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(randomForest)
+library(EBImage)
+library(e1071)
+library(plotly)
+library(Rtsne)
+library(jsonlite)
+library(RSQLite)
+library(LMGene)
+library(gridExtra)
+library(ggpubr)
+library(uwot)
+library(pryr)
+library(data.table)
+library(dtplyr)
+library(patchwork)
+
+filtering_classifier <- readRDS("objects_classification/1000_rf/after_cleanup/filtering_classifier.rds")
+
+```
+#Subsample
+I retrieved a subsample of cells from the large scale screen comprising around 2 million single cells. There is one plate from screens S001 to S175. From each plate 6 wells were selected and 2000 cells sampled from each. The subsample was processed following the same steps as the training set.
+##Classification
+```{r}
+
+#I have to rule out cells which are at the edges of the image. 
+
+subsample_curr_screen <- read_csv("objects_model_testing/subsample_processed_features.csv", col_names = T, col_types = cols(plate = col_character())) %>% 
+                            filter(DNA.m.cx > 100 & DNA.m.cx < 1948 & DNA.m.cy > 100 & DNA.m.cy < 1948)
+
+#This step rules out 20 % of the cells. This value is almost identical to the one obtained in the time-resolved screen. 
+
+#Segmentation classifier. 
+
+subsample_screen_segm <- subsample_curr_screen %>% mutate(good_segm = predict(filtering_classifier, subsample_curr_screen))
+
+#The segmentation classifier rules out 30 % of the remaining cells. This accounts for 24 % of the initial number of cells. 
+
+subsample_screen_segm %>% count("good_segm")
+
+#After filtering for cells at the edges and segmentation errors, we only end up with 56.6 of the cells. 
+
+```
+##Proportions by well
+I would like to show the number of cells that are eliminated in each filtering step by condition. I could do that making violin plots as there are many different conditions in the subsample. 
+```{r}
+
+bar_plot_data <- read_csv("model_testing/subsample_processed_features.csv", col_names = T, col_types = cols(plate = col_character())) %>% 
+                    mutate(edge = if_else(DNA.m.cx > 100 & DNA.m.cx < 1948 & DNA.m.cy > 100 & DNA.m.cy < 1948, "No", "Yes"))
+
+bar_plot_data <- bar_plot_data %>% mutate(good_segm = predict(filtering_classifier, bar_plot_data))
+
+bar_plot_data <- bar_plot_data %>% unite(id, screen, plate, well, sep = "_")
+
+list_conditions <- list()
+
+for (unique_id in unique(bar_plot_data$id)){
+  
+  data <- bar_plot_data %>% filter(id == unique_id)
+  
+  data["n_edge"] <- rep(nrow(data %>% filter(edge == "No")), nrow(data))
+  
+  data["n_segm"] <- rep(nrow(data %>% filter(edge == "No", good_segm == "Yes")), nrow(data))
+  
+  data["total"] <- rep(nrow(data), nrow(data))
+  
+  list_conditions[[unique_id]] <- data %>% select(id, n_edge, n_segm, total) %>% distinct_at(.vars = "id", .keep_all = T)
+  
+}
+
+#Pivot_longer is an updated and easier-to-understand version of gather(). Pivot_wider is equivalent to spread().
+
+bar_plot_prop <- do.call("rbind", list_conditions) %>% mutate(edge = n_edge/total, well_segmented = n_segm/total, total = total/total) %>% 
+                  pivot_longer(cols = c(edge, well_segmented, total), names_to = "type", values_to = "proportion") %>% 
+                  mutate(type = factor(type, levels = c("total", "edge", "well_segmented")))
+                  
+
+load("~/Desktop/Sergi_master_thesis/themes/bar_plot_theme.RData")
+
+ikea_yellow <- "#FFDA1A"
+
+ikea_blue <- "#0051BA"
+
+mcdonalds_red <- "#DA291C"
+
+dot_plot_large <- ggplot(bar_plot_prop, aes(x = type, y = proportion, colour = type))+
+                      geom_jitter()+
+                      stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.25, colour = "black")+
+                      bar_plot_theme()+
+                      ylab("Proportion of cells")+
+                      scale_color_manual(values = c(mcdonalds_red, ikea_blue, ikea_yellow))+
+                      theme(legend.title = element_blank(),
+                            axis.text.x = element_blank(),
+                            plot.title = element_text(size = 26, hjust = 0.5))+
+                      guides(colour = guide_legend(nrow = 1, override.aes = list(size = 6)))+
+                      scale_y_continuous(limits = c(0,1), expand = c(0,0))+
+                      ggtitle("Large-scale screen")
+
+#For most of the conditions the final proportion of cells lays between 55 and 65 % of the total. There are only few that are below 25%. 
+
+ggsave(dot_plot_large, filename = "model_testing/plots/dot_plots_proportions/large_screen_well.pdf")
+
+```
+#Time-resolved subsample
+I want to compare the filtering classifiers of the present screen and the time-resolved experiment. Here I will use the segmentation algorithm developed for the time-resolved screen pipeline. I will applied to a subsample of the data which includes cells from all screens. More specifically, 6 random plates and 20 random wells were selected from which 1000 cells were copied by condition. This gives rise to data from two replicates of 420 different conditions. 
+##Classification
+```{r}
+
+filtering_classifier_time <- readRDS("objects_model_testing/filtering_classifier_time_screen.rds")
+
+subsample_time_screen <- readRDS("objects_model_testing/subsample_time_screen.rds") %>% 
+                            filter(DNA.m.cx > 100 & DNA.m.cx < 1948 & DNA.m.cy > 100 & DNA.m.cy < 1948)
+
+#Filtering cells at the edges results in 20 % loss of cells. 
+
+subsample_time_segm <- subsample_time_screen %>% mutate(good_segm = predict(filtering_classifier_time, subsample_time_screen))
+
+#Filtering segmentation errors eliminates 25 % of the remaining cells which constitutes around 20 % of the inintial number cells. 
+
+count(subsample_time_segm, "good_segm")
+
+#After the prefiltering steps we end up with 61 % of the original number of cells. 
+
+
+```
+##Proportions by well
+I will ike to see the outcome of the filtering steps by condition in a similar manner to the time-resolved screen. 
+```{r}
+
+bar_plot_data_time <- readRDS("objects_model_testing/subsample_time_screen.rds") %>% 
+                        mutate(edge = if_else(DNA.m.cx > 100 & DNA.m.cx < 1948 & DNA.m.cy > 100 & DNA.m.cy < 1948, "No", "Yes"))
+
+
+bar_plot_data_time <-  bar_plot_data_time %>% mutate(good_segm = predict(filtering_classifier_time, bar_plot_data_time)) %>% 
+                        unite(id, screen, plate, well, sep = "_")
+
+list_conditions_time <- list()
+
+for (unique_id in unique(bar_plot_data_time$id)){
+  
+  data <- bar_plot_data_time %>% filter(id == unique_id)
+  
+  data["n_edge"] <- rep(nrow(data %>% filter(edge == "No")), nrow(data))
+  
+  data["n_segm"] <- rep(nrow(data %>% filter(edge == "No", good_segm == "Yes")), nrow(data))
+  
+  data["total"] <- rep(nrow(data), nrow(data))
+  
+  list_conditions_time[[unique_id]] <- data %>% select(id, n_edge, n_segm, total) %>% distinct_at(.vars = "id", .keep_all = T)
+  
+}
+
+#Pivot_longer is an updated and easier-to-understand version of gather(). Pivot_wider is equivalent to spread().
+
+bar_plot_proptime <- do.call("rbind", list_conditions_time) %>% mutate(edge = n_edge/total, well_segmented = n_segm/total, total = total/total) %>% 
+                      pivot_longer(cols = c(edge, well_segmented, total), names_to = "type", values_to = "proportion") %>% 
+                      mutate(type = factor(type, levels = c("total", "edge", "well_segmented")))
+                      
+
+
+dot_plot_time <- ggplot(bar_plot_proptime, aes(x = type, y = proportion, colour = type))+
+                      geom_jitter()+
+                      bar_plot_theme()+
+                      ylab("Proportion of cells")+
+                      stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.25, colour = "black")+
+                      scale_color_manual(values = c(mcdonalds_red, ikea_blue, ikea_yellow))+
+                      theme(legend.title = element_blank(),
+                            axis.text.x = element_blank(),
+                            plot.title = element_text(size = 26, hjust = 0.5))+
+                      guides(colour = guide_legend(nrow = 1, override.aes = list(size = 6)))+
+                      scale_y_continuous(expand = c(0,0), limits = c(0,1))+
+                      ggtitle("Time-resolved screen")
+
+#The median of cells after filtering is higher compared to the large-scale screen. There are more instances of conditions in which more than 75 % were lost in the process. This might be due to the fact that there are wells with cells 5 days after RNAi treatment. 
+
+ggsave(dot_plot_time, filename = "model_testing/plots/dot_plots_proportions/time_screen_well.pdf")
+
+
+```
+#Cross-comparisons
+We are interested in determining how well can we transfer a model from one dataset to the other one. For that I will apply each model to the dataset in which it was not trained. 
+##Time-resolved screen
+```{r}
+
+# Time-resolved screen.
+
+subsample_time_segm <- subsample_time_segm %>% mutate(cross_segm = predict(filtering_classifier, subsample_time_screen)) %>% 
+                        mutate(match_segm = if_else(good_segm == cross_segm, "Match", "No match"))
+
+#There is a match in the predictions for 82 % of the cells. 
+
+stacked_time_data <- rbind(count(subsample_time_segm, "match_segm") %>% as.data.frame() %>% mutate(type = rep("cross_comparison")),
+                           count(subsample_time_segm, "good_segm") %>% as.data.frame() %>% dplyr::rename(match_segm = good_segm) %>% 
+                             mutate(type = rep("time_algorithm")),
+                           count(subsample_time_segm, "cross_segm") %>% as.data.frame() %>% dplyr::rename(match_segm = cross_segm) %>% 
+                             mutate(type = rep("screen_algorithm"))) %>% dplyr::rename(value = match_segm) %>% group_by(type) %>% 
+                        mutate(proportion = freq/sum(freq)) %>% ungroup()
+
+#I will make two separate stacked bar plots, one which show the cross-comparison among the models, and the other one which shows the proportion of good and bad segmented cells given by every classifier. 
+
+#Model matching
+
+amazon_orange <- "#FF9900"
+
+amazon_blue <- "#146eb4" 
+
+stacked_cross_comparison <- ggplot(stacked_time_data %>% filter(type == "cross_comparison"), aes(x = type, y = proportion, 
+                                                                                                 fill = factor(value, levels = c("No match", "Match")),
+                                                                                                 label = round(proportion, 2)))+
+                              geom_bar(stat = "identity", position = "stack")+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19),
+                                    axis.ticks.x = element_blank())+
+                              guides(fill = guide_legend(nrow = 1, override.aes = list(size = 3), title.position = "top", title.hjust = 0.5, reverse = T))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1))+
+                              scale_fill_manual(values = c(amazon_orange, amazon_blue))+
+                              labs(fill = "Model comparison")+
+                              ylab("Proportion of cells")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+
+#Group proportions         
+
+stacked_prop_time <- ggplot(stacked_time_data %>% filter(type != "cross_comparison"), aes(x = type, y = proportion, 
+                                                                                                 fill = factor(value, levels = c("No", "Yes")),
+                                                                                                 label = round(proportion, 2)))+
+                              geom_bar(stat = "identity", position = "stack", width = 0.75)+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19), 
+                                    axis.text.y = element_blank(),
+                                    axis.title.y = element_blank(),
+                                    axis.ticks.y = element_blank(),
+                                    axis.line.y = element_blank(),
+                                    axis.ticks.x = element_blank())+
+                              guides(fill = guide_legend(nrow = 1, override.aes = list(size = 5), reverse = T, title.position = "top", title.hjust = 0.5))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1))+
+                              scale_fill_manual(values = c(google_red, google_green))+
+                              labs(fill = "Good segmentation")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+arranged_stack_time <- stacked_cross_comparison + stacked_prop_time + 
+                          plot_annotation(title = "Time-resolved screen", theme = theme(plot.title = element_text(size = 26, hjust = 0.5)))+
+                            plot_layout(widths = c(1,2))
+                             
+ggsave(arranged_stack_time, filename = "model_testing/plots/model_comparison_time_screen.pdf", width = 9) 
+
+
+```
+##Large-scale screen
+```{r}
+
+subsample_screen_segm <- subsample_screen_segm %>% mutate(cross_segm = predict(filtering_classifier_time, subsample_screen_segm)) %>% 
+                            mutate(match_segm = if_else(good_segm == cross_segm, "Match", "No match"))
+
+#The match is around 80 %
+
+stacked_screen_data <- rbind(count(subsample_screen_segm, "match_segm") %>% as.data.frame() %>% mutate(type = rep("cross_comparison")),
+                           count(subsample_screen_segm, "good_segm") %>% as.data.frame() %>% dplyr::rename(match_segm = good_segm) %>% 
+                             mutate(type = rep("screen_algorithm")),
+                           count(subsample_screen_segm, "cross_segm") %>% as.data.frame() %>% dplyr::rename(match_segm = cross_segm) %>% 
+                             mutate(type = rep("time_algorithm"))) %>% dplyr::rename(value = match_segm) %>% group_by(type) %>% 
+                        mutate(proportion = freq/sum(freq)) %>% ungroup()
+
+
+#Model matching
+
+stacked_cross_comp_screen <- ggplot(stacked_screen_data %>% filter(type == "cross_comparison"), aes(x = type, y = proportion, 
+                                                                                                 fill = factor(value, levels = c("No match", "Match")),
+                                                                                                 label = round(proportion, 2)))+
+                              geom_bar(stat = "identity", position = "stack")+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19),
+                                    axis.ticks.x = element_blank())+
+                              guides(fill = guide_legend(nrow = 1, override.aes = list(size = 3), title.position = "top", title.hjust = 0.5, reverse = T))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1))+
+                              scale_fill_manual(values = c(amazon_orange, amazon_blue))+
+                              labs(fill = "Model comparison")+
+                              ylab("Proportion of cells")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+
+#Group proportions         
+
+stacked_prop_screen <- ggplot(stacked_screen_data %>% filter(type != "cross_comparison"), aes(x = type, y = proportion, 
+                                                                                                 fill = factor(value, levels = c("No", "Yes")),
+                                                                                                 label = round(proportion, 2)))+
+                              geom_bar(stat = "identity", position = "stack", width = 0.75)+
+                              bar_plot_theme()+
+                              theme(legend.title = element_text(size = 19), 
+                                    axis.text.y = element_blank(),
+                                    axis.title.y = element_blank(),
+                                    axis.ticks.y = element_blank(),
+                                    axis.line.y = element_blank(),
+                                    axis.ticks.x = element_blank())+
+                              guides(fill = guide_legend(nrow = 1, override.aes = list(size = 5), reverse = T, title.position = "top", title.hjust = 0.5))+
+                              scale_y_continuous(expand = c(0,0), limits = c(0,1))+
+                              scale_fill_manual(values = c(google_red, google_green))+
+                              labs(fill = "Good segmentation")+
+                              geom_text(size = 8, position = position_stack(vjust = 0.5), colour = "white")
+
+arranged_stack_screen <- stacked_cross_comp_screen + stacked_prop_screen + 
+                          plot_annotation(title = "Large-scale screen", theme = theme(plot.title = element_text(size = 26, hjust = 0.5)))+
+                            plot_layout(widths = c(1,2))
+                             
+ggsave(arranged_stack_screen, filename = "model_testing/plots/model_comparison_large_screen.pdf", width = 9) 
+
+
+```
+#Comparison n cells
+The classifier trained on the syngene screen always labels around 5-10 % more cells as wrongly segmented. This means that we have less cells at the end of the filtering process for the downstream analysis. I would like to compare conditions which were identical in both screens and look at how many cells were present in the filtered data frame. It is possible that the syngene classifier eliminates more cells, but if there are more cells in the wells of the screen, then we might end up with similar number of cells compared to the time-resolved pipeline. 
+The control plate of the syngene screen is identical to the time-resolved screen plate. In the control plates of the large-scale screen, no query gene was added. In all plates of the time-resolved screen a query was present. However, rows 12 and 13 acted as negative controls and did not have a query. Therefore we could compare the number of cells at each step for these conditions, since they are identical between the screens. 
+##Syngene screen
+```{r}
+
+load("~/Desktop/Sergi_master_thesis/gene_annotation/gene_annotation_time_resolved_data.RData")
+
+#I need to process the data before the classification. 
+
+load("model_testing/scale_factors_S001_S222.RData")
+
+data_normalization <- function(value, median, mad){
+  
+  return((glog(value, lambda = 1)-median)/mad)
+  
+}
+
+#Only wells in rows 12 and 13 will be selected, as they are identical between screens.  
+
+list_wells <- c(target_mappin %>% pull(V2) %>% str_subset(pattern = c("12")),
+                target_mappin %>% pull(V2) %>% str_subset(pattern = c("13")))
+
+#Control plates are identical in all screens, therefore I will randomly select one. In this case the CTRL1 plate of S206. 
+
+control_syn <- read_csv("model_testing/S206_CTRL1.zip") %>% filter(well %in% list_wells)
+
+#Data processing
+
+  for (feature in numeric_features){
+    
+    if(list_mads[["S206"]][[feature]] != 0){
+      
+      control_syn[feature] <- data_normalization(control_syn[[feature]], list_medians[["S206"]][[feature]], list_mads[["S206"]][[feature]])
+      
+    }else{control_syn[feature] <- glog(control_syn[[feature]], lambda = 1)}
+    
+  }
+
+#Cell filtering
+
+control_syn <- control_syn %>% mutate(edge = if_else(DNA.m.cx > 100 & DNA.m.cx < 1948 & DNA.m.cy > 100 & DNA.m.cy < 1948, "No", "Yes"),
+                                      good_segm = predict(filtering_classifier, control_syn))
+
+#Following the observed trend, after both filtering steps, the total number of cells is reduced to 57 % of the initial number. 
+
+count(control_syn, c("good_segm", "edge"))
+
+#There are 225,487 cells which are not at the edges and are well segmented. This means around 7000 cells per well. 
+  
+
+
+```
+##Time-resolved screen
+I will pick a plate from S2, which corresponds to 4 days after RNAi addition which is the same time frame that our current screen. 
+```{r}
+
+#Here again negative controls are identical for all plates, therefore I will simply select an arbitrary one. 
+
+load("~/Desktop/Sergi_master_thesis/gene_annotation/gene_annotation_time_resolved_data.RData")
+
+database_time_screen <- database <- dbConnect(SQLite(), "/Volumes/EXTHD0360/time_resolved_screen/")
+
+control_time <- tbl(database_time_screen, "classified_single_cells") %>% filter(screen == "S2", plate == "P74") %>% collect() %>% 
+                  filter(well %in% list_wells)
+
+#In this case there are 215,615 cells in the same conditions. This means there are almost 10.000 less cells than in the syngene screen. This accounts for 6730 cells per well on average. 
+
+#Conclusion: even though the syngene classifier is more stringent and labels more cells as wrongly segmented, since there seems to be on average more cells in the wells, at the end of the filtering process we have a similar number of cells for the downstream analysis. 
+
+
+
+
+
+```
+

@@ -1,0 +1,340 @@
+---
+title: "database_copying"
+author: "Sergi"
+date: "11/28/2019"
+output: html_document
+abstract: There is single cell data missing in the database. Here I will get the screens, plates and wells which are missing. 
+editor_options: 
+  chunk_output_type: console
+---
+#Package loading
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(dplyr)
+library(dbplyr)
+library(corrr)
+library(caret)
+library(umap)
+library(randomForest)
+library(EBImage)
+library(e1071)
+library(RColorBrewer)
+library(plotly)
+library(Rtsne)
+library(jsonlite)
+library(kernlab)
+library(RSQLite)
+library(rlist)
+library(plyr)
+library(LMGene)
+library(gridExtra)
+library(ggpubr)
+library(uwot)
+library(data.table)
+library(dtplyr)
+
+query_genes <- readRDS("objects/query_genes.rds")
+
+target_genes <- readRDS("objects/target_genes.rds")
+```
+#Database connection
+```{r}
+
+database_results <- src_postgres(dbname = "incell2000_test",
+                                 host = "b110-sc2sn01",
+                                 user = "SBeneyto",
+                                 password = "beneyto123")
+
+
+single_cell_data <- tbl(database_results, "D1086_single_cell_V1") 
+
+query_genes <- readRDS("objects/query_genes.rds")
+
+target_genes <- readRDS("objects/target_genes.rds")
+
+list_screens <- query_genes %>% select(plate_barcode) %>% separate(plate_barcode, into = c("barcode", "screen"), sep = "_") %>% pull(screen)
+
+list_plates <- unique(target_genes$plate) %>% as.character()
+
+list_wells <- unique(target_genes$well) %>% as.character()
+
+#In the database wells from 1 to 9 have a 0 between the letter and the number. 
+
+list_wells_corrected <- vector()
+
+for(well_name in list_wells){
+  
+  if(nchar(well_name) == 2){
+    
+    well_name_corrected <- paste0(str_split(well_name, "")[[1]][1], "0", str_split(well_name, "")[[1]][2])
+    
+    list_wells_corrected <- c(list_wells_corrected, well_name_corrected)
+    
+  }else{list_wells_corrected <- c(list_wells_corrected, well_name)}
+  
+}
+
+
+
+```
+#Get missing screens
+It takes very long to get the unique combinations of screens, plates and rows because the database table is only indexed by screen. I am almost sure that data from the first 62 screens is not present in the database table. When missing data is trying to be collected, immediately an empty table is obtained. That is why for the first 62 screens I will run a process which will check that there is no data for any well in any plate. 
+```{r}
+
+#This list will have the screens and plates as names and the missing wells as objects. 
+
+missing_data <- list()
+
+copied_data <- vector()
+
+#If a screen has no data copied it will be added to the missing screens object. 
+
+missing_screens <- vector()
+
+for (screen_name in sort(list_screens)[1:63]){
+  
+  data_found <- FALSE
+  
+  for (plate_name in sort(list_plates)){
+    
+    missing_wells <- vector()
+    
+    for (well_name in list_wells_corrected){
+      
+      data <- single_cell_data %>% filter(screen == screen_name, plate == plate_name, well == well_name) %>% collect(n=1)
+      
+      if(nrow(data) == 0){
+        
+        missing_wells <- c(missing_wells, well_name)
+        
+        print(paste0(screen_name, "_", plate_name, "_", well_name, " missing"))
+        
+      }else{
+        
+        copied_data <- c(copied_data, paste0(screen_name, "_", plate_name, "_", well_name))
+        
+        print(paste0(screen_name, "_", plate_name, "_", well_name, " found"))
+        
+        data_found <- TRUE
+      }
+    }
+    
+    missing_data[[screen_name]][[plate_name]] <- missing_wells
+    
+    saveRDS(missing_data, file = "objects/missing_data_database.rds")
+  }
+  
+  if(data_found == FALSE){
+    
+    missing_screens <- c(missing_screens, screen_name)
+    
+    saveRDS(missing_screens, file = "objects/missing_screens.rds")
+    
+  }
+}
+
+#Data from the first 62 screens is not present in the database. S064 is also missing. 
+
+```
+##Copy missing data
+For screens S001-64 I will gather the single cell data into csv files and stored in the hard drive EXTHD0360. This will allow to compute the scale factors of the screens. Furthermore, we will have the single cell data gathered into files for the single cell analysis. Furthermore, it will make it easier to upload to the database file. 
+```{r}
+
+#There is data for S063 in the database but it is easier if I also copied in the results hard drive. 
+
+missing_screens <- c(missing_screens, "S063")
+
+output_folder <- "/Volumes/EXTHD0362/syngene_screen/raw_data/"
+
+ext_folder <- "/Volumes/EXTHD0343/S064/"
+
+pb <- txtProgressBar(min = 0, max = 1536, style = 3)
+
+for (screen_id in missing_screens){
+  
+  if(!dir.exists(paste0(output_folder, screen_id))){
+    
+   dir.create(paste0(output_folder, screen_id)) 
+    
+  }
+  
+  list_plate_folders <- list.files(ext_folder, pattern = screen_id)
+  
+  if(length(list_plate_folders)>0){
+    
+    for (plate_folder in list_plate_folders){
+    
+      raw_data_files <- list.files(paste0(ext_folder, "/",plate_folder, "/"), pattern = "RData")
+  
+      plate <- str_split(plate_folder, "_")[[1]][5]
+    
+      files <- 0
+    
+      print(paste0(screen_id, " + ", plate, " started"))
+    
+      for(file in raw_data_files){
+      
+        files <- files+1
+        
+        setTxtProgressBar(pb, files)
+      
+        load(paste0(ext_folder,plate_folder, "/", file))
+      
+        cell_features <- cell_features %>% as_tibble() %>% mutate(screen = as.character(screen),
+                                                                                       plate = as.character(plate),
+                                                                                       well = as.character(well),
+                                                                                       field = as.numeric(field),
+                                                                                       dark = as.logical(dark),
+                                                                                       fussel = as.logical(fussel),
+                                                                                       weak_tubulin = as.logical(weak_tubulin))
+        if(colnames(cell_features)[1] == "barcode"){
+          
+          cell_features <- cell_features %>% select(-barcode)
+          
+        }
+        
+        if(files == 1){
+        
+          write_csv(cell_features, path = paste0(output_folder, screen_id, "/", screen_id, "_", plate, ".csv"), col_names = T)
+        
+        }else{
+        
+          write_csv(cell_features, path = paste0(output_folder, screen_id, "/", screen_id, "_", plate, ".csv"), col_names = F, append = T)
+        
+        }
+      }
+      
+       print(paste0(screen_id, " + ", plate, " completed"))
+      
+    }
+  }
+}
+
+
+```
+#Subsample
+In order to test the perfomance of the different classifiers, I will take a subsample of cells from the complete screen. For each screen until S175 I will randomly select one plate and 6 wells. From each condition 2000 cells will be sampled. By doing this we will get between 1.5 and 2 million cells from very different conditions and screening times which are representative of the diversity of phenotypes in the screen. 
+```{r}
+
+#Only screens with good quality control will be selected. 
+
+list_good_screens <- query_genes %>% separate(plate_barcode, into = c("barcode", "screen")) %>% filter(qc_general == T) %>% pull(screen)
+
+#Only S001 to S064 are in hard drives.  
+
+list_good_screens <- sort(list_good_screens)[1:53]
+
+list_chosen_conditions <- list()
+
+for(screen in list_good_screens){
+  
+  list_chosen_conditions[[screen]] <- list("plate" = sample(list_plates, 1),
+                                       "wells" = sample(list_wells, 6, replace = F))
+  
+}
+
+#count <- 0
+
+for(screen_name in list_good_screens){
+  
+  plate_name <- as.character(list_chosen_conditions[[screen_name]][["plate"]])
+  
+  if(screen_name %in% list.files("/Volumes/EXTHD0360/large_scale_screen/raw_data/")){
+    
+    data <- read_csv(paste0("/Volumes/EXTHD0360/large_scale_screen/raw_data/", screen_name, "/", screen_name, "_", plate_name, ".csv"), col_names = T)
+    
+    for (well_name in list_chosen_conditions[[screen_name]][["wells"]]){
+      
+      count <- count + 1
+    
+      data_well <- data %>% filter(well == well_name)
+    
+      if(nrow(data_well >= 2000)){
+      
+        data_sampled <- sample_n(data_well, size = 2000, replace = F)
+      
+      }else{data_sampled <- data_well}
+    
+      if(count == 1){
+      
+        write_csv(data_sampled, path = "objects/subsample_raw_data_part2.csv", col_names = T)
+      
+      }else{write_csv(data_sampled, path = "objects/subsample_raw_data_part2.csv", col_names = F, append = T)}
+
+    }
+    
+    print(paste0(screen_name, " completed"))
+    
+  }
+}
+
+#Part 1 corresponds to a subsample from screens S065 to S175 which were retrieved from the database. It is present in the 3.1.- data_obtention project. 
+
+subsample <- read_csv("objects/subsample_raw_data_part1.csv", col_names = T, col_types = cols(plate = col_character()))
+
+#Part 2 corresponds to a subsample from screens S001 to S064 which were retrieved from the copied data in the hard drives. 
+
+subsample2 <- read_csv("objects/subsample_raw_data_part2.csv", col_names = T, col_types = cols(plate = col_character()))
+
+subsample_complete <- rbind(subsample, subsample2)
+
+rm(subsample, subsample2)
+
+#I have to rename the wells which have two digits. I will stay with the two digit format and therefore eliminate the 0 that the others have. 
+
+subsample_complete <- subsample_complete %>% 
+                        mutate(well = if_else(nchar(well) == 2, paste0(strsplit(well, "")[[1]][1], "0",strsplit(well, "")[[1]][2]), well))
+
+#The complete subsample has 1.87 million cells. 
+
+```
+##Process features
+I will process the feature values by glog transforming the data with lambda = 1 and robust Z-score transformation using the scale factors calculated from the control plates of each screen. 
+```{r}
+
+load("objects/scale_factors.RData")
+
+load("objects/numeric_features.RData")
+
+data_normalization <- function(value, median, mad){
+  
+  return((glog(value, lambda = 1)-median)/mad)
+  
+}
+
+
+count <- 0
+
+for(screen_name in unique(subsample_complete$screen)){
+  
+  count <- count + 1
+  
+  data <- subsample_complete %>% filter(screen == screen_name) 
+  
+  for (feature in numeric_features){
+    
+    if(list_mads[[screen_name]][[feature]] != 0){
+      
+      data[feature] <- data_normalization(data[[feature]], list_medians[[screen_name]][[feature]], list_mads[[screen_name]][[feature]])
+      
+    }else{data[feature] <- glog(data[[feature]], lambda = 1)}
+    
+  }
+  
+  if(count == 1){
+    
+    write_csv(data, path = "objects/subsample_processed_features.csv", col_names = T)
+    
+  }else{write_csv(data, path = "objects/subsample_processed_features.csv", col_names = F, append = T)}
+  
+  print(paste0(screen_name, " completed"))
+  
+  
+}
+
+subsample_processed <- read_csv("objects/subsample_processed_features.csv", col_names = T, col_types = cols(plate = col_character()))
+
+```
+

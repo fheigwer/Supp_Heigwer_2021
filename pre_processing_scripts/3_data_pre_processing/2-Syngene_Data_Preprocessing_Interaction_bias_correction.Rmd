@@ -1,0 +1,271 @@
+---
+title: "0-Interaction-bias-correction"
+author: "Florian Heigwer"
+date: "13/07/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(MASS)
+library(tidyverse)
+library(patchwork)
+library(limma)
+
+call_interactions<-function (x, TP, TargetNeg, QueryNeg, eps = 1e-04, maxiter = 100, na.rm = TRUE){
+  if (missing(TP)) {
+    MTP = 1
+    TP = rep(1, dim(x)[1])
+  }
+  else {
+    MTP = max(TP)
+  }
+  z <- x
+  nr <- nrow(z)
+  nc <- ncol(z)
+  t <- 0
+  r <- numeric(nr)
+  c <- matrix(numeric(MTP * nc), nrow = MTP)
+  oldsum <- 0
+  for (iter in 1L:maxiter) {
+    rdelta <- apply(z, 1L, median, na.rm = na.rm)
+    z <- z - matrix(rdelta, nrow = nr, ncol = nc)
+    r <- r + rdelta
+    cdelta <- apply(z, 2L, function(s) {
+      tapply(s, TP, median, na.rm = na.rm)
+    })
+    if (MTP == 1) {
+      z <- z - t(matrix(cdelta, nrow = nc, ncol = nr))
+    }
+    else {
+      z <- z - apply(cdelta, 2, function(s) {
+        s[TP]
+      })
+    }
+    c <- c + cdelta
+    if (missing(QueryNeg)) {
+      delta = median(c, na.rm = na.rm)
+      if (!is.finite(delta)) {
+        delta = 0
+      }
+    }
+    else {
+      delta <- mean(c[, QueryNeg], na.rm = TRUE)
+      if (!is.finite(delta)) {
+        delta = median(c, na.rm = na.rm)
+        if (!is.finite(delta)) {
+          delta = 0
+        }
+      }
+    }
+    c <- c - delta
+    t <- t + delta
+    if (missing(TargetNeg)) {
+      delta = median(r, na.rm = na.rm)
+      if (!is.finite(delta)) {
+        delta = 0
+      }
+    }
+    else {
+      delta <- mean(r[TargetNeg], na.rm = TRUE)
+      if (!is.finite(delta)) {
+        delta = median(r, na.rm = na.rm)
+        if (!is.finite(delta)) {
+          delta = 0
+        }
+      }
+    }
+    r <- r - delta
+    t <- t + delta
+    newsum <- sum(abs(z), na.rm = na.rm)
+    converged <- newsum == 0 || abs(newsum - oldsum) < eps * 
+      newsum
+    if (converged) 
+      break
+    oldsum <- newsum
+  }
+  if (!converged) {
+    warning(gettextf("maineffects() did not converge in %d iterations", 
+                     maxiter), domain = NA)
+  }
+  ans <- list(neg = t, targetMainEffect = r, queryMainEffect = t(c), 
+              pi = z)
+  ans
+}
+
+theme_b110<-function(){
+  theme_classic() +
+  theme(
+    axis.text=element_text(size = 10), 
+    axis.title=element_text(size = 10),
+    plot.title = element_text(size = 12,hjust = 0.5,face="bold"),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size =10),
+    legend.position = "bottom"
+    )
+}
+
+sgi_blue    = '#5087C8'
+sgi_yellow1 = '#F2EE35'
+sgi_yellow2 = '#FED98E'
+b110_grey   = '#808080'
+b110_grey_light   = '#909090'
+b110_transparent_black = alpha('#000000',0.5)
+google_red='#dd4b39'
+google_green='#0F9D58'
+google_yellow='#F4B400'
+google_blue='#4285F4'
+
+```
+
+## Load example data
+
+For show casing the bias of lethal genes being artificially assigned a positive interaction score by any other semi-lethal gene.
+
+```{r load_data}
+load("processed_data/filtered_data_cells.RData")
+```
+
+Then we extract the target annotations and reshape the data such that colums are the query genes (dsRNA replicates separate) and rows are target genes (dsRNA replicates separate).
+
+```{r extract_anno}
+annotated_data_to_plot_woctrl_wellnorm <- filtered_data
+
+target_annotation<-annotated_data_to_plot_woctrl_wellnorm %>%
+  dplyr::select(targetid,fbgn,gene_id) %>%
+  distinct() %>% 
+  group_by(targetid) %>% 
+  do(head(.,n=1)) %>%
+  ungroup()
+
+int_data <- filtered_data %>% 
+  unite(query_name,query_name,screen) %>%
+  spread(query_name,value)
+```
+
+Estimate the target and query median effect from the normalized filtered data for later reference as the main effects.
+
+```{r confounder}
+  confounder <- filtered_data %>%
+    group_by(targetid,query_name) %>%
+    group_by(query_name) %>%
+    mutate(query_main=median(value,na.rm = T)) %>%
+    group_by(targetid) %>%
+    mutate(target_main=median(value,na.rm = T)) %>%
+    ungroup() %>%
+    dplyr::select(-value,-screen,-fbgn,-design,-gene_id) %>%
+    distinct() 
+```
+
+Now we can call interactions as the residual of a median polish analysis as reported earlier in:
+
+Fischer et al., eLife, 2015;4:e05464 doi: 10.7554/eLife.05464
+
+
+```{r interaction_calling, echo=FALSE}
+ 
+  interaction <- call_interactions(int_data[,5:ncol(int_data)])
+
+  interaction <- cbind.data.frame(int_data[,1:4],interaction$pi) %>% 
+    gather(query_name,value,-fbgn,-design,-gene_id,-targetid) %>% 
+    tbl_df() %>% 
+    separate(query_name,c("query_name","screen"),sep = "_")
+  
+  interaction_stats <- 
+    interaction %>% 
+    group_by(query_name,targetid) %>% 
+    mutate(repl=c(1:4)) %>%
+    dplyr::select(targetid,query_name,value,repl) %>%
+    drop_na() %>%
+    ungroup()
+  
+  interaction_stats<-interaction_stats %>% left_join(confounder) %>% left_join(target_annotation)
+  
+  interaction_stats_biased<-
+    interaction_stats %>% 
+    group_by(targetid,query_name) %>% 
+    summarise(value=mean(value,na.rm=T),query_main=query_main[1],target_main=target_main[1])
+  
+```
+
+Next we are going to visualize if there is a relationship of the remaining residuals of the median polish and the median effects of each target and query.
+
+```{r Example_plot, message=FALSE, warning=FALSE, include=FALSE}
+
+a <- interaction_stats_biased %>%
+  filter(query_name=="brm") %>%
+  ggplot(aes(x=target_main,y=value)) +
+    geom_point() +
+    geom_smooth(method = "rlm") +
+    theme_b110() +
+    ggtitle("main effects vs. pi-scores \n (brm as query)")
+
+b <- interaction_stats_biased %>%
+  filter(targetid=="18_G17") %>%
+  ggplot(aes(x=query_main,y=value)) +
+    geom_point()+
+    geom_smooth(method = "rlm") +
+    theme_b110() +
+    ggtitle("main effects vs. pi-scores \n (brm as target)")
+
+```
+
+As is apparent from this analysis we see a clear correlation between the main-effects of each gene and its ability to form interactions. Especially we see a linear dependency of positive pi-scores and negative main effects.
+
+In a next step we remove this effect by modeling it using a robust linear model separately for each query, estimate a p-value by a moderated one-sample t-test (limma) and finally center and scale the pi-score to make sure that the pi-score distributions of each query follow the approximately same distribution.
+
+```{r}
+  fun<-function(x){
+    x$combo=x$target_main+x$query_main
+    mdl<- rlm(value~combo,data = x)
+    x$correction=predict(mdl,x)
+    x$correctedpi=x$value-x$correction
+    return(x)
+  }
+  
+  interaction_stats %<>% group_by(query_name) %>% do(
+    fun(.)
+  ) %>%
+    dplyr::select(-value,-correction,-combo) %>%
+    separate(targetid,c("plate","well"),remove = "F",sep="_") %>%
+    group_by(well,query_name) %>%
+    mutate(correctedpi=correctedpi-median(correctedpi,na.rm=T)) %>%
+    ungroup() %>%
+    spread(repl,correctedpi) %>%
+    ungroup() %>% 
+    mutate(
+      pval=eBayes(lmFit(.[,9:12]))$p.value,
+      mpi=rowMeans(.[,9:12],na.rm = T)) %>%
+    group_by(query_name) %>%
+    mutate(mpi=mpi/sd(mpi,na.rm=T)) %>%
+    ungroup()
+  
+  interaction_stats$fdr <- p.adjust(interaction_stats$pval,method = "BH")
+```
+
+Finally we visualize the successful removal of the effect.
+
+```{r united_vizualization, message=FALSE, warning=FALSE}
+
+c <- interaction_stats %>%
+  filter(query_name=="brm") %>%
+  ggplot(aes(x=target_main,y=mpi)) +
+    geom_point() +
+    geom_smooth(method = "rlm") +
+    theme_b110() +
+    ggtitle("Corrected: pi-scored vs. main effects \n (brm as query)")
+
+d <- interaction_stats %>%
+  filter(query_name=="Cdc23") %>%
+  ggplot(aes(x=target_main,y=mpi)) +
+    geom_point() +
+    geom_smooth(method = "rlm") +
+    theme_b110() +
+    ggtitle("Corrected: pi-scored vs. main effects \n (Cdc23 as query)")
+
+print(a+b+c+d)
+
+ggsave("plots/F1_SX_interaction_lethal_bias.pdf",width = 15,height = 15,units = "cm")
+```
+
+  
+

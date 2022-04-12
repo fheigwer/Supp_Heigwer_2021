@@ -1,0 +1,831 @@
+---
+title: "hclustering_fly_human"
+author: "Vera"
+date: "24/02/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## Objectives:
+In the markdown "internal_vs_external_table > internal_vs_external_fly_yeast_human_genegroups.Rmd", we plotted Venn diagrams showing the genegroups with significant shifts between internal and external correlations (see for example internal_vs_external_table > Plots > fly_yeast_human_genegroups_internalvsexternal_significance_quadvenn.pdf). In the unfiltered quadvenn, there is a fairly big overlap between the two fly datasets and the human dataset, but not the yeast dataset (34). we wanna plot a heatmap (fly vs human) of genes annotated with genegroups in those 34 plus nearest neighbor genes in a heatmap.
+
+## Chunk Description:
+- Load packages and data (chunks 1 & 2)
+- Which genegroups have significant internal vs. external shift in both fly datasets as well as in the human dataset (but not the yeast dataset)? -> vector (chunk 3)
+- Modify orthologues list: add genegorup annotation (34 genegroups), keep only one fly gene per human gene and one human gene per fly gene (chunk 4)
+- Normalize datasets, plot density histograms (chunk 5)
+- Tidy up datasets: Add genegroup annotations (and fly gene names to human dataset) (chunks 6 & 7)
+- Filter datasets for genes present in the orther dataset, get rid of duplicated genepairs in fly dataset by calculating mean (chunk 8)
+- Create vector of genes of interest (genes annotated with one of the 34 genegroups plus nearest neighbors, based on fly genetic interaction correlation) (chunk 9)
+- Filter datasets for genes of interest, genepairs in both datasets (chunks 10 & 11)
+- Modify values (< 0 -> = 0) and spread datasets to obtain symmetrical matrices (chunks 12 & 13)
+- Hierarchical clustering and heatmaps - based on fly genetic interacton profile correlation (chunks 14 - 16)
+- Hierarchical clustering and heatmaps - based on human gene effect correlation (chunks 17 - 19)
+
+
+## 1. Load packages
+
+```{r}
+
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(gplots)
+library(heatmaply)
+#library(dtplyr)
+
+```
+
+## 2. Load data
+
+```{r}
+
+# The table used to plot the Venn diagrams is called cor_analysis_wide in the markdown. This table is loaded here to create a vector of the 34 gene groups of interest
+corr_analysis_wide <- read_delim(file = "internal_vs_external_table/internal_vs_external_fly_yeast_human_genegroupsortho_wide.txt", delim = "\t")
+
+# Annotation datasets:
+
+# Load gene group annotations (fly), (Florian, 14.02.2020):
+genegroups <- read_delim(file = "internal_vs_external_table/genes_to_gene_groups.txt", delim = "\t")
+
+# Load list of orthologue pairs from Ensembl database -27.11.2019:
+orthologues <- read_delim("conserved_functional_groups/new_orthologues_list_copy.txt", delim = "\t")
+
+# Correlation datasets:
+
+# Genetic interaction profile correlations for Fly (based on cell count), (Florian, 29.01.2020):
+load(file = "conserved_functional_groups/cell_count_interaction_correlations_pearson_p_unfiltered_fly.RData")
+# This dataset is named GI_corrs, in the markdown mostly referred to as "cellcount"
+
+# Morphology feature correlations for Fly, (Florian, 03.02.2020):
+load(file = "conserved_functional_groups/feature_correlations_pearson_p_unfiltered_fly.RData")
+# This dataset is named feature_corrs
+
+# Load human dataset (gene effect correlation)
+# Load dataset filtered for genes in the orthologues list (created in chunk 4 of cons_functional_groups_human markdown)
+# (otherwise, I'll have the problem of having 168 million rows again)
+ceres_corrs_sep_in_ortho <- read_csv(file = "conserved_functional_groups/pre-data/Human_dataset_filtering/ceres_corrs_sep_filtered.csv")
+
+```
+
+## 3. Which genegroups have significant internal vs. external shift in both fly datasets as well as in the human dataset (but not the yeast dataset)?
+
+```{r}
+
+# corr_analysis_wide needs to be filtered for both fly FDRs as well as human FDR to be < 0.2 and yeast FDR to be either NA or >= 0.2
+
+# Check, if number of rows is 34 (as observed in Venn diagram):
+nrow(corr_analysis_wide %>% filter(fly_fdr_GI < 0.2 & fdr_features < 0.2 & human_fdr_GI < 0.2 & (yeast_fdr_GI >= 0.2 | is.na(yeast_fdr_GI))))
+# [1] 34
+
+# Create vector of those 34 gene groups:
+genegroups_34 <- (corr_analysis_wide %>% 
+                    filter(fly_fdr_GI < 0.2 & fdr_features < 0.2 & human_fdr_GI < 0.2 & (yeast_fdr_GI >= 0.2 | is.na(yeast_fdr_GI))))[["genegroup"]] %>%  
+  sort()
+
+# Which genegroups are there?
+print(genegroups_34)
+# [1] "ACTIN-RELATED PROTEIN 2/3 COMPLEX"                                                                                   
+# [2] "C2H2 ZINC FINGER TRANSCRIPTION FACTORS"                                                                              
+# [3] "CCR4-NOT COMPLEX"                                                                                                    
+# [4] "COAT PROTEIN COMPLEX I"                                                                                              
+# [5] "CONDENSIN I"                                                                                                         
+# [6] "CYTOCHROME-C OXIDASES"                                                                                               
+# [7] "DYNACTIN COMPLEX"                                                                                                    
+# [8] "EXOCYST"                                                                                                             
+# [9] "Fibroblast Growth Factor Receptor Signaling Pathway Core Components"                                                 
+#[10] "M6A METHYLTRANSFERASE COMPLEX"                                                                                       
+#[11] "MITOCHONDRIAL COMPLEXwe- NADH:UBIQUINONE OXIDOREDUCTASE COMPLEX SUBUNITS"                                           
+#[12] "MITOCHONDRIAL COMPLEX IV - CYTOCHROME C OXIDASE SUBUNITS"                                                            
+#[13] "MITOCHONDRIAL F[[0]] ATP SYNTHASE COMPLEX SUBUNITS"                                                                  
+#[14] "MITOCHONDRIAL F[[1]] ATP SYNTHASE COMPLEX SUBUNITS"                                                                  
+#[15] "MITOCHONDRIAL SMALL RIBOSOMAL PROTEINS"                                                                              
+#[16] "NADH DEHYDROGENASES"                                                                                                 
+#[17] "Negative Regulators of Insulin-like Receptor Signaling Pathway"                                                      
+#[18] "Negative Regulators of JAK-STAT Signaling Pathway"                                                                   
+#[19] "Negative Regulators of Torso Signaling Pathway"                                                                      
+#[20] "NEUROPEPTIDES"                                                                                                       
+#[21] "NK-LIKE HOMEOBOX TRANSCRIPTION FACTORS"                                                                              
+#[22] "NUCLEOSOME REMODELING DEACETYLASE COMPLEX"                                                                           
+#[23] "Platelet-Derived Growth Factor-Vascular Endothelial Growth Factor Receptor-Related Signaling Pathway Core Components"
+#[24] "POLYADENYLATION FACTORS"                                                                                             
+#[25] "RAB GTPASES"                                                                                                         
+#[26] "RNA EXOSOME COMPLEX"                                                                                                 
+#[27] "S1A SERINE PROTEASES - CHYMOTRYPSIN-LIKE"                                                                            
+#[28] "SLC22 FAMILY OF ORGANIC IONS TRANSPORTERS"                                                                           
+#[29] "STRIATIN-INTERACTING PHOSPHATASE AND KINASE COMPLEX"                                                                 
+#[30] "TRANSCRIPTION EXPORT COMPLEX"                                                                                        
+#[31] "TRAPP COMPLEX"                                                                                                       
+#[32] "VACUOLAR ATPASE V1 DOMAIN SUBUNITS"                                                                                  
+#[33] "WASP AND SCAR HOMOLOG COMPLEX"                                                                                       
+#[34] "WAVE REGULATORY COMPLEX"   
+
+# Create vector of genes annotated with one of those 34 genegroups:
+genes_genegroups_34 <- (genegroups %>% filter(gene_group %in% genegroups_34))[["current_symbol"]] %>% unique() %>% sort()
+
+```
+
+## 4. Add genegroup annotation (filtered) to orthologues list, create unique orthologues (one human gene per fly gene and vice versa)
+
+```{r}
+
+# Add genegroup annotation (filtered) to orthologues list
+orthologues_genegroups <- left_join(orthologues, (genegroups %>% 
+                                                    rename(Gene_stable_ID = current_fbgn) %>% 
+                                                    filter(gene_group %in% genegroups_34)), by = "Gene_stable_ID") %>%
+                          select(-S_cerevisiae_gene_name,                                            # Columns corresponding to S. cerevisiae can be dropped
+                                  -S_cerevisiae_orthology_confidence_0low_1high, 
+                                  -S_cerevisiae_gene_stable_ID, 
+                                  -percentage_id_query_gene_identical_to_target_S_cerevisiae_gene) %>%
+                          distinct()                                                                  # Remove duplicated rows
+dim(orthologues_genegroups)
+# [1] 31632     8
+
+# How many rows have genegroup annotations?
+nrow(orthologues_genegroups %>% select(gene_group) %>% drop_na())
+# [1] 2515 -> the majority of the genes is not annotated (at least not with one of the 34 genegroups)
+# Make sure that there are 34 different annotations:
+nrow(orthologues_genegroups %>% select(gene_group) %>% drop_na() %>% distinct())
+# [1] 34
+
+# Create unique orthologues_genegroups list: one human gene corresponds to only one fly gene and one fly gene to only one human gene
+orthologues_genegroups_unique <- orthologues_genegroups %>% 
+  group_by(Human_gene_name) %>%                                               # First: one fly gene per human gene
+  arrange(desc(percentage_id_query_gene_identical_to_target_Human_gene)) %>% 
+  do(head(.,1)) %>% 
+  ungroup() %>% 
+  group_by(Gene_name) %>%                                                     # Second: one human gene per fly gene
+  arrange(desc(percentage_id_query_gene_identical_to_target_Human_gene)) %>% 
+  do(head(.,1)) %>% 
+  ungroup()
+dim(orthologues_genegroups_unique)
+# [1] 5380    8
+nrow(orthologues_genegroups_unique %>% select(gene_group) %>% drop_na() %>% distinct())
+# [1] 32 - two of the genegroups got lost
+
+```
+
+## 5. Normalize datasets, plot density histograms
+
+```{r}
+
+# Define b110 theme:
+theme_b110<-function(){
+  theme_classic() +
+  theme(
+    axis.text=element_text(size = 16), 
+    axis.title=element_text(size = 16),
+    plot.title = element_text(size = 22,hjust = 0.5,face="bold"),
+    legend.title = element_text(size = 22),
+    legend.text = element_text(size =16),
+    legend.position = "bottom"
+    )
+}
+
+# Density histograms:
+# Before normalization: fly genetic interaction profile correlation
+GI_corrs %>% 
+  ggplot(aes(x = r)) +
+  geom_histogram(binwidth = 0.005, fill = "blue3") +
+  theme_b110() +
+  xlab("pearson correlation") +
+  ggtitle(" Density histogram of genetic interaction profile correlation \n before normalization, fly dataset")
+min(GI_corrs$r)
+# [1] -0.7740765
+max(GI_corrs$r)
+# [1] 1
+
+# Before normalization: human gene effect correlation
+ceres_corrs_sep_in_ortho %>% 
+  ggplot(aes(x = r)) +
+  geom_histogram(binwidth = 0.005, fill = "darkorange2") +
+  theme_b110() +
+  xlab("pearson correlation") +
+  ggtitle(" Density histogram of gene effect correlation \n before normalization, human dataset")
+min(ceres_corrs_sep_in_ortho$r)
+# [1] -0.5949766
+max(ceres_corrs_sep_in_ortho$r)
+# [1] 0.9258851
+
+# The distributions are not similar -> normalization needed by dividing by standard deviation and by overall maximum normalized value
+# Which value is the overall maximum r_norm value?
+max((GI_corrs %>%  mutate(r_norm = r/sd(r)))$r_norm)
+# [1] 8.529139
+max((ceres_corrs_sep_in_ortho %>%  mutate(r_norm = r/sd(r)))$r_norm)
+# [1] 16.00281
+
+#### Normalization ####
+
+# fly genetic interaction correlations:
+GI_corrs_norm <- GI_corrs %>% 
+  mutate(r_norm = r/sd(r)) %>%        # divide all r values by their standard deviation
+  mutate(r_norm = r_norm/16.00281)    # divide normalized r values by overall maximum r value
+
+# human gene effect correlations:
+ceres_corrs_sep_in_ortho_norm <- ceres_corrs_sep_in_ortho %>% 
+  mutate(r_norm = r/sd(r)) %>%        # divide all r values by their standard deviation
+  mutate(r_norm = r_norm/16.00281)    # divide normalized r values by overall maximum r value
+
+# Density histograms
+# After normalization: fly genetic interaction profile correlation
+GI_corrs_norm %>% 
+  ggplot(aes(x = r_norm)) +
+  geom_histogram(binwidth = 0.005, fill = "blue3") +
+  theme_b110() +
+  xlab("pearson correlation") +
+  ggtitle(" Density histogram of genetic interaction profile correlation \n after normalization, fly genetic interaction dataset")
+min(GI_corrs_norm$r_norm)
+# [1] -0.4125654
+max(GI_corrs_norm$r_norm)
+# [1] 0.5329776
+
+# After normalization: human gene effect correlation
+ceres_corrs_sep_in_ortho_norm %>% 
+  ggplot(aes(x = r_norm)) +
+  geom_histogram(binwidth = 0.005, fill = "darkorange2") +
+  theme_b110() +
+  xlab("pearson correlation") +
+  ggtitle(" Density histogram of gene effect correlation \n after normalization, human dataset")
+min(ceres_corrs_sep_in_ortho_norm$r_norm)
+# [1] -0.6426032
+max(ceres_corrs_sep_in_ortho_norm$r_norm)
+# [1] 1
+
+```
+
+## 6. Tidy up fly datasets
+
+```{r}
+
+# Use Florian's code to separate gene and IDs into single columns:
+# For cell count-based data:
+fly_correlation_cellcount <- GI_corrs_norm %>%
+  separate(x,c("genex","idx"),sep = "öö")%>%
+  separate(y,c("geney","idy"),sep = "öö") %>%
+  dplyr::select(genex,geney,idx,idy,r, r_norm) 
+dim(fly_correlation_cellcount)
+# [1] 23526370        6
+# For feature-based data:
+#fly_correlation_features <- feature_corrs %>%
+#  separate(x,c("genex","idx"),sep = "öö")%>%
+#  separate(y,c("geney","idy"),sep = "öö") %>%
+#  dplyr::select(genex,geney,idx,idy,r) 
+#dim(fly_correlation_features)
+# [1] 23526370        5
+
+# Create new columns in both datasets (genegroup_1 and genegroup_2), by left-joining with the orthologues_genegroups list
+# Cell count-based data:
+fly_corr_cellcount_anno <- fly_correlation_cellcount %>% 
+  rename(Gene_name = genex) %>% 
+  left_join((orthologues_genegroups_unique %>% select(Gene_name, gene_group) %>% distinct()), by = "Gene_name") %>%
+  rename(Gene_1 = Gene_name, genegroup_1 = gene_group) %>% 
+  rename(Gene_name = geney) %>% 
+  left_join((orthologues_genegroups_unique %>% select(Gene_name, gene_group) %>% distinct()), by = "Gene_name") %>% 
+  rename(Gene_2 = Gene_name, genegroup_2 = gene_group) 
+dim(fly_corr_cellcount_anno)
+# [1] 23526370        8
+
+# Feature-based data:
+#fly_corr_features_anno <- fly_correlation_features %>% 
+#  rename(Gene_name = genex) %>% 
+#  left_join((orthologues_genegroups_unique %>% select(Gene_name, gene_group) %>% distinct()), by = "Gene_name") %>%
+#  rename(Gene_1 = Gene_name, genegroup_1 = gene_group) %>% 
+#  rename(Gene_name = geney) %>% 
+#  left_join((orthologues_genegroups_unique %>% select(Gene_name, gene_group) %>% distinct()), by = "Gene_name") %>% 
+#  rename(Gene_2 = Gene_name, genegroup_2 = gene_group) 
+#dim(fly_corr_features_anno)
+# [1] 23526370        7
+
+```
+
+## 7. Tidy up human dataset
+
+```{r}
+
+# The human dataset was already filtered to contain only genes present in the unmodified orthologues list (see cons_functional_groups_human markdown) (otherwise, genegroup annotation not possible)
+
+dim(ceres_corrs_sep_in_ortho)
+# [1] 37208251        5
+
+# Add fly gene names and genegroup annotations to human dataset:
+human_corr_anno <- ceres_corrs_sep_in_ortho_norm %>% 
+  select(-xnum, -ynum) %>% 
+  rename(Human_gene_name = x) %>% 
+  left_join((orthologues_genegroups_unique %>% select(Human_gene_name, Gene_name, gene_group) %>% distinct()), by = "Human_gene_name") %>%
+  rename(Gene_1 = Human_gene_name,Gene_1_flyname = Gene_name, genegroup_1 = gene_group) %>% 
+  rename(Human_gene_name = y) %>% 
+  left_join((orthologues_genegroups_unique %>% select(Human_gene_name, Gene_name, gene_group) %>% distinct()), by = "Human_gene_name") %>% 
+  rename(Gene_2 = Human_gene_name, Gene_2_flyname = Gene_name, genegroup_2 = gene_group) %>% 
+  filter(! (is.na(Gene_1_flyname) | is.na(Gene_2_flyname)))   # keep only rows, which have a corresponding fly gene name (mandatory for plotting later)
+dim(human_corr_anno)
+# [1] 13320541        8
+
+```
+
+## 8. Filter datasets for genes present in the other datasets (gene pairs present in all datasets)
+
+```{r}
+
+# Create vectors of genes present in both columns of fly dataset/human dataset
+# Fly:
+fly_genes_1 <- (fly_corr_cellcount_anno %>% select(Gene_1) %>% distinct())[["Gene_1"]]
+fly_genes_2 <- (fly_corr_cellcount_anno %>% select(Gene_2) %>% distinct())[["Gene_2"]]
+fly_genes <- subset(fly_genes_1, fly_genes_1 %in% fly_genes_2) %>% unique() %>% sort()
+rm(fly_genes_1, fly_genes_2)
+
+# Human (vector containing fly gene names present in human dataset as human gene names)
+human_genes_1 <- (human_corr_anno %>% select(Gene_1_flyname) %>% distinct())[["Gene_1_flyname"]]
+human_genes_2 <- (human_corr_anno %>% select(Gene_2_flyname) %>% distinct())[["Gene_2_flyname"]]
+human_genes <- subset(human_genes_1, human_genes_1 %in% human_genes_2) %>% unique() %>% sort()
+rm(human_genes_1, human_genes_2)
+
+# Filter fly datasets: both Genes have to be in human_genes vector
+fly_corr_cellcount_anno_filtered <- fly_corr_cellcount_anno %>% 
+  filter(Gene_1 %in% human_genes & Gene_2 %in% human_genes)
+dim(fly_corr_cellcount_anno_filtered)
+# [1] 4128501       8
+#fly_corr_features_anno_filtered <- fly_corr_features_anno %>% 
+#  filter(Gene_1 %in% human_genes & Gene_2 %in% human_genes)
+#dim(fly_corr_features_anno_filtered)
+# [1] 4128501       7
+
+# Filter human dataset: both Genes (fly names) have to be in fly_genes vector
+human_corr_anno_filtered <- human_corr_anno %>% 
+  filter(Gene_1_flyname %in% fly_genes & Gene_2_flyname %in% fly_genes)
+dim(human_corr_anno_filtered)
+# [1] 4094091       7
+
+# There are duplications in the fly datasets (same gene 1 and gene 2, but more than one correlation value (and also different ids)):
+nrow(fly_corr_cellcount_anno_filtered)
+# [1] 4128501
+nrow(fly_corr_cellcount_anno_filtered %>% select(Gene_1, Gene_2) %>% distinct())
+# [1] 4088383
+
+# In the human dataset, this is not the case:
+#nrow(human_corr_anno_filtered_genepairs)
+nrow(human_corr_anno_filtered)
+# [1] 4094091
+#nrow(human_corr_anno_filtered_genepairs %>% select(genepair) %>% distinct())
+nrow(human_corr_anno_filtered %>% select(Gene_1_flyname, Gene_2_flyname) %>% distinct())
+# [1] 4094091
+
+# Get rid of duplicated gene pairs in fly datasets by calculating mean of r 
+fly_corr_cellcount_anno_filtered_mean <- fly_corr_cellcount_anno_filtered %>% 
+  group_by(Gene_1, Gene_2) %>%        # mean is calculated per gene pair
+  mutate(r_mean = mean(r_norm)) %>%   # calculate mean in new column
+  select(-r, -r_norm, -idx, -idy) %>% # drop original mean column and ids (otherwise, there will still be duplicates after distinct())
+  distinct()                          # get rid of duplicated rows
+dim(fly_corr_cellcount_anno_filtered_mean)
+# [1] 4088383       5
+#fly_corr_features_anno_filtered_mean <- fly_corr_features_anno_filtered %>% 
+#  group_by(Gene_1, Gene_2) %>%        # mean is calculated per gene pair
+#  mutate(r_mean = mean(r)) %>%        # calculate mean in new column
+#  select(-r, -idx, -idy) %>%          # drop original mean column and ids (otherwise, there will still be duplicates after distinct())
+#  distinct()                          # get rid of duplicated rows
+#dim(fly_corr_features_anno_filtered_mean)
+# [1] 4088383       5
+
+```
+
+## 9. Create vector of genes of interest (genes annotated with one of the 34 genegroups plus nearest neighbors, based on fly genetic interaction correlation)
+
+```{r}
+
+# Filtering is supposed to be based on the fly genetic interaction profile correlation data, so I'll continue with the cellcount dataset to create a vector of genes of interest
+
+# we wanna keep 
+# 1. all the genes which have a genegroup annotation out of the 34
+# -> For this, we can just use the genes_genegroups_34 vector
+
+# 2. For each genegroup, we wanna keep the "nearest not-annotated neighbor", meaning the gene (pair) with the highest correlation, for gene pairs in which only one gene is annotated
+# -> This is what I'm trying now:
+# keep only rows, in which only one gene has a genegroup annotation
+
+fly_corr_cellcount_anno_filtered_oneanno <- fly_corr_cellcount_anno_filtered_mean %>% 
+  filter((is.na(genegroup_1) | is.na(genegroup_2)) & !(is.na(genegroup_1) & is.na(genegroup_2)))
+dim(fly_corr_cellcount_anno_filtered_oneanno)
+# [1] 628800      5
+
+# Now, we wanna have a for-loop looking like this:
+
+# for each annotated gene (filtered already in step above)
+#       filter: Gene_1 == we | Gene_2 == i
+#       arrange by desc correlation value
+#       get highest correlation value (use do head (.1))
+#       write gene pair (or whole row) into new dataframe/list
+# using: genes_genegroups_34 vector
+
+# Create empty list to add rows (resulting from for loop)
+#nearest_neighbors_list <- list()
+
+# for loop:
+# Filter dataset for Gene_1 OR Gene_2 being member of genes_genegroups_34 list, arrange r correlation values (descending), take top row (highest correlation value), write this row in nearest_neighbors_list
+
+#pb = txtProgressBar(min = 0, max = length(genes_genegroups_34), initial = 0, style=3) # style=3 -> progress bar with %values
+
+#fly_corr_cellcount_anno_filtered_oneanno_lazy <- lazy_dt(fly_corr_cellcount_anno_filtered_oneanno)
+
+#for (i in 1:length(genes_genegroups_34)) {
+#  nearest_neighbors_list[[i]] <- (fly_corr_cellcount_anno_filtered_oneanno_lazy %>% 
+#      filter((Gene_1 == genes_genegroups_34[i] | Gene_2 == genes_genegroups_34[i])) %>% 
+#      arrange(desc(r_mean)) %>% 
+#      as_tibble() %>% 
+#      do(head(.,1))) 
+#  setTxtProgressBar(pb,i)
+#}
+
+# Convert list to dataframe
+#nearest_neighbors_df <- do.call("rbind", nearest_neighbors_list)
+#dim(nearest_neighbors_df)
+# [1] 240   5
+#rm(nearest_neighbors_list)
+
+# Save nearest neighbors dataframe:
+#write_delim(nearest_neighbors_df, path = "hclustering_cross_organism/hclustering_fly_human_nearest_neighbors.txt", delim = "\t")
+
+# Load nearest neighbors dataframe:
+nearest_neighbors_df <- read_delim(file = "hclustering_cross_organism/hclustering_fly_human_nearest_neighbors.txt", delim = "\t")
+
+# Create vector of genes in the nearest neighbors df:
+nearest_neighbors_genes <- c(nearest_neighbors_df[["Gene_1"]], nearest_neighbors_df[["Gene_2"]]) %>% unique() %>% sort()
+length(nearest_neighbors_genes)
+# [1] 434 (contains also annotated genes - remove those:)
+nearest_neighbors_genes <- subset(nearest_neighbors_genes, ! nearest_neighbors_genes %in% genes_genegroups_34)
+length(nearest_neighbors_genes)
+# [1] 194 -> 194 non-annotated genes (nearest neighbors)
+
+# Create vector of genes of interest by combining genes_genegroups_34 vector and nearest_neighbors_genes:
+genes_of_interest <- c(genes_genegroups_34, nearest_neighbors_genes) %>% sort()
+length(genes_of_interest)
+# [1] 987
+
+```
+
+## 10. Filter datasets for genes of interest
+
+```{r}
+
+# Filter fly datasets for genes of interest:
+fly_corr_cellcount_genesofinterest <- fly_corr_cellcount_anno_filtered_mean %>% 
+  filter(Gene_1 %in% genes_of_interest & Gene_2 %in% genes_of_interest)
+dim(fly_corr_cellcount_genesofinterest)
+# [1] 93963     5
+#fly_corr_features_genesofinterest <- fly_corr_features_anno_filtered_mean %>% 
+#  filter(Gene_1 %in% genes_of_interest & Gene_2 %in% genes_of_interest)
+#dim(fly_corr_features_genesofinterest)
+# [1] 93963     5
+
+# Filter human dataset for genes of interest:
+human_corr_genesofinterest <- human_corr_anno_filtered %>% 
+  filter(Gene_1_flyname %in% genes_of_interest & Gene_2_flyname %in% genes_of_interest)
+dim(human_corr_genesofinterest)
+# [1] 93961     7
+
+```
+
+## 11. Make sure, that genes are present in both datasets and genepairs are the same in all datasets
+
+```{r}
+
+# Make sure, that genes are present in both columns (mandatory for matrix to be symmetrical):
+
+# Fly datasets:
+# Vectors:
+fly_gene_1 <- fly_corr_cellcount_genesofinterest[["Gene_1"]] %>% unique()
+fly_gene_2 <- fly_corr_cellcount_genesofinterest[["Gene_2"]] %>% unique()
+
+# Filter fly datasets:
+fly_corr_cellcount_genesofinterest_filtered <- fly_corr_cellcount_genesofinterest %>% 
+  filter(Gene_1 %in% fly_gene_2) %>% 
+  filter(Gene_2 %in% fly_gene_1)
+dim(fly_corr_cellcount_genesofinterest_filtered)
+# [1] 93098     5
+#fly_corr_features_genesofinterest_filtered <- fly_corr_features_genesofinterest %>% 
+#  filter(Gene_1 %in% fly_gene_2) %>% 
+#  filter(Gene_2 %in% fly_gene_1)
+#dim(fly_corr_features_genesofinterest_filtered)
+# # [1] 93098     5
+
+# Human dataset:
+# Vectors: 
+human_flygene_1 <- human_corr_genesofinterest[["Gene_1_flyname"]] %>%  unique()
+human_flygene_2 <- human_corr_genesofinterest[["Gene_2_flyname"]] %>%  unique()
+
+# Filter human dataset:
+human_corr_genesofinterest_filtered <- human_corr_genesofinterest %>% 
+  filter(Gene_1_flyname %in% human_flygene_2) %>% 
+  filter(Gene_2_flyname %in% human_flygene_1)
+dim(human_corr_genesofinterest_filtered)
+# [1] 93096     7
+
+#### genepairs ####
+
+# Create vector of genepairs in fly dataset:
+fly_genepairs_genesofinterest <- (fly_corr_cellcount_genesofinterest_filtered %>% unite(Gene_1, Gene_2, col = "genepair", sep = "öö") %>% select(genepair) %>% distinct())[["genepair"]]
+
+# Create duplicated dataset of human dataset (with Gene_1/Gene_2, Gene_1_flyname/Gene_2_flyname, genegroup_1/genegroup_2 switched)
+human_corr_genesofinterest_filtered_switched <- human_corr_genesofinterest_filtered %>% 
+  rename(Gene_2 = Gene_1, Gene_1 = Gene_2, Gene_2_flyname = Gene_1_flyname, Gene_1_flyname = Gene_2_flyname, genegroup_2 = genegroup_1, genegroup_1 = genegroup_2)
+human_corr_genesofinterest_filtered_duplicates <- rbind(human_corr_genesofinterest_filtered, human_corr_genesofinterest_filtered_switched)
+dim(human_corr_genesofinterest_filtered_duplicates)
+# [1] 186192      7 (186192/2 = 93096)
+
+# Filter human duplicated dataset for gene pairs in fly datasets:
+human_corr_anno_genepairs_flydataset <- human_corr_genesofinterest_filtered_duplicates %>% 
+  unite(Gene_1_flyname, Gene_2_flyname, col = "genepair", sep = "öö") %>% 
+  filter(genepair %in% fly_genepairs_genesofinterest) %>% 
+  distinct()
+dim(human_corr_anno_genepairs_flydataset)
+# [1] 92235     6
+
+# Create vector of genepairs in already filtered human dataset:
+human_genepairs_genesofinterest <- (human_corr_anno_genepairs_flydataset %>% select(genepair) %>% distinct())[["genepair"]]
+
+# Create duplicated dataset of fly dataset (with Gene_1/Gene_2, genegroup_1/genegroup_2 switched)
+fly_corr_cellcount_genesofinterest_filtered_switched <- fly_corr_cellcount_genesofinterest_filtered %>% 
+  rename(Gene_2 = Gene_1, Gene_1 = Gene_2, genegroup_2 = genegroup_1, genegroup_1 = genegroup_2)
+fly_corr_cellcount_genesofinterest_filtered_duplicates <- rbind(fly_corr_cellcount_genesofinterest_filtered, fly_corr_cellcount_genesofinterest_filtered_switched)
+dim(fly_corr_cellcount_genesofinterest_filtered_duplicates)
+#[1] 186196      5 (186196/2 = 93098)
+
+# Filter fly duplicated dataset for gene pairs in human dataset:
+fly_corr_cellcount_anno_genepairs_humandataset <- fly_corr_cellcount_genesofinterest_filtered_duplicates %>% 
+  unite(Gene_1, Gene_2, col = "genepair", sep = "öö") %>% 
+  filter(genepair %in% human_genepairs_genesofinterest) %>% 
+  distinct()
+dim(fly_corr_cellcount_anno_genepairs_humandataset)
+# [1] 92235     4
+
+# Make sure, that gene airs in the different datasets are the same:
+identical((fly_corr_cellcount_anno_genepairs_humandataset[["genepair"]] %>% sort()), (human_corr_anno_genepairs_flydataset[["genepair"]] %>% sort()))
+# [1] TRUE
+
+# Now, we have two datasets (fly genetic interaction correlationa and human correlation), which have the same gene pairs and can be used to spread to matrix
+
+```
+
+## 12. Spread dataset to symmetrical matrix - fly genetic interactions
+
+```{r}
+
+# Set all values < 0 -> = 0 and calculate *(-1)
+fly_corr_cellcount_anno_genepairs_humandataset <- fly_corr_cellcount_anno_genepairs_humandataset %>% 
+  mutate(r_mean = ifelse(r_mean < 0, 0, r_mean)) %>% 
+  mutate(r_mean = -1*r_mean)
+
+# Duplicate dataset (to get symmetrical matrix)
+fly_corr_cellcount_anno_genepairs_humandataset_new <- (rbind((fly_corr_cellcount_anno_genepairs_humandataset %>% 
+                                                               separate(genepair, into = c("Gene_1", "Gene_2"), sep = "öö")),
+                                                             (fly_corr_cellcount_anno_genepairs_humandataset %>% 
+                                                                separate(genepair, into = c("Gene_1", "Gene_2"), sep = "öö") %>% 
+                                                                rename(Gene_2 = Gene_1, Gene_1 = Gene_2))))
+
+# Spread matrix
+fly_cellcount_spreaded <- fly_corr_cellcount_anno_genepairs_humandataset_new %>%
+  select(-genegroup_1, -genegroup_2) %>% 
+  spread(Gene_2, r_mean) %>% 
+  arrange(Gene_1) %>% 
+  column_to_rownames("Gene_1")
+dim(fly_cellcount_spreaded)
+# [1] 430 430
+
+# Symmetrical?
+identical(rownames(fly_cellcount_spreaded), colnames(fly_cellcount_spreaded))
+# [1] TRUE
+
+```
+
+## 13. Spread dataset to symmetrical matrix -  human dataset
+
+```{r}
+
+# Set all values < 0 -> = 0
+human_corr_anno_genepairs_flydataset <- human_corr_anno_genepairs_flydataset %>% 
+  mutate(r_norm = ifelse(r_norm < 0, 0, r_norm))
+
+# Duplicate dataset (to get symmetrical matrix later)
+human_corr_anno_genepairs_flydataset_new <- (rbind((human_corr_anno_genepairs_flydataset %>%
+                                                      separate(genepair, into = c("Gene_1_flyname", "Gene_2_flyname"), sep = "öö")),
+                                                   (human_corr_anno_genepairs_flydataset %>% 
+                                                      separate(genepair, into = c("Gene_1_flyname", "Gene_2_flyname"), sep = "öö") %>% 
+                                                      rename(Gene_2_flyname = Gene_1_flyname, Gene_1_flyname = Gene_2_flyname))))
+
+# Spread matrix
+human_spreaded <- human_corr_anno_genepairs_flydataset_new %>%
+  select(-genegroup_1, -genegroup_2, -Gene_1, -Gene_2, -r) %>% 
+  spread(Gene_2_flyname, r_norm) %>% 
+  arrange(Gene_1_flyname) %>% 
+  column_to_rownames("Gene_1_flyname")
+dim(human_spreaded)
+# [1] 430 430
+
+# Symmetrical?
+identical(rownames(human_spreaded), colnames(human_spreaded))
+# [1] TRUE
+
+# Make sure that matrices of the two datasets have the same row/colnames:
+identical(rownames(fly_cellcount_spreaded), rownames(human_spreaded))
+identical(colnames(fly_cellcount_spreaded), colnames(human_spreaded))
+# Both return TRUE
+
+```
+
+## 14. Hierarchical clustering - based on genetic interaction profile correlation (fly)
+
+```{r}
+
+# Create hierarchical clustering vector, based on genetic interaction profile correlations:
+distance_fly_cellcount <- dist(fly_cellcount_spreaded)
+ordered_fly_cellcount <- hclust(distance_fly_cellcount)$order
+# Ordered_fly_cellcount is a vector containing the order of hierarchical clustered columns/rows based on the original matrix and can be used to order both symmetrical matrices according to clusters generated for the genetic interaction profile (fly) correlation values
+
+# Clustered matrix for fly cellcount:
+fly_cellcount_ordered <- fly_cellcount_spreaded[ordered_fly_cellcount, ordered_fly_cellcount]
+
+# Clustered matrix for human:
+human_clust_fly_cellcount <- human_spreaded[ordered_fly_cellcount, ordered_fly_cellcount]
+
+# Make sure that both matrices are ordered the same way:
+identical(rownames(fly_cellcount_ordered), rownames(human_clust_fly_cellcount))
+identical(colnames(fly_cellcount_ordered), colnames(human_clust_fly_cellcount))
+# both return TRUE
+
+# Generate common clustered matrix of both clustered matrices:
+common_matrix_clustered_fly_cellcount <- fly_cellcount_ordered
+common_matrix_clustered_fly_cellcount[upper.tri(common_matrix_clustered_fly_cellcount)] <- human_clust_fly_cellcount[upper.tri(human_clust_fly_cellcount)]
+
+```
+
+## 15. Heatmap of hierarchical clustered matrix (clustering based on fly genetic interaction profile correlation)
+
+```{r}
+
+common_matrix_clustered_fly_cellcount_matrix <- data.matrix(common_matrix_clustered_fly_cellcount)
+
+heatmap.2(common_matrix_clustered_fly_cellcount_matrix, 
+          Rowv = FALSE,
+          Colv = FALSE,
+          col = c((colorRampPalette(c("darkblue", "white", "darkorange2"))(100))),
+          trace = "none",
+          dendrogram = "none",
+          na.color = "darkorange4")
+
+```
+
+## 16. Interactive heatmap of hierarchical clustered matrix (clustering based on fly gen. int. profile correlation), including genegroup annotations
+
+```{r}
+
+# Replace NA values by -1.01 (to make diagonal be plotted in dark blue, instead of white)
+common_matrix_clustered_fly_cellcount_matrix[is.na(common_matrix_clustered_fly_cellcount_matrix)] <- -1.01
+
+# Create a label names vector to plot names with genegroup annotation:
+labelnames_fly_cellcount <- as_tibble(matrix(nrow = 430, ncol = 1)) %>%
+  mutate(V1 = rownames(common_matrix_clustered_fly_cellcount_matrix)) %>%
+  rename(Gene_name = V1) %>% 
+  left_join((orthologues_genegroups_unique %>% select(Gene_name, gene_group)), by = "Gene_name") %>% 
+  mutate(gene_group = ifelse(is.na(gene_group), "no_ann", gene_group)) %>% 
+  unite(col = "gene", Gene_name, gene_group, sep = "__")
+labelnames_fly_cellcount_vec <- labelnames_fly_cellcount[["gene"]]
+
+# Plot heatmap (with row- and column labels): 
+#heatmaply(common_matrix_clustered_fly_cellcount_matrix,
+#          plot_method = "plotly",
+#          colors = c((colorRampPalette(c("darkblue",  "blue3", "white", "darkorange2", "darkorange4"))(50))),
+#          limits = c(-1,1),
+#          Rowv = FALSE,
+#          Colv = FALSE,
+#          dendrogram = "none",
+#          fontsize_row = 10,
+#          fontsize_col = 10,
+#          key.title = " Colorkey: \n blue: gen. int. profile fly \n orange: gene effect human",
+#          colorbar_len = 0.5,
+#          row_text_angle = 0,
+#          column_text_angle = -45,
+#          main = " Heatmap of pos. pearson correlation values \n Annotated Genes and nearest neighbors, clust: gen. int. profile fly",
+#          margins = c(30, 30, 70, 30),
+#          labRow = labelnames_fly_cellcount_vec,
+#          labCol = labelnames_fly_cellcount_vec#,
+#          file = "hclustering_cross_organism/hclustering_fly_human_heatmap_clustered_flycellcount_withanno.html"
+#          )
+
+# Plot heatmap (without row- and column labels): 
+#heatmaply(common_matrix_clustered_fly_cellcount_matrix,
+#          plot_method = "plotly",
+#          colors = c((colorRampPalette(c("darkblue",  "blue3", "white", "darkorange2", "darkorange4"))(50))),
+#          limits = c(-1,1),
+#          Rowv = FALSE,
+#          Colv = FALSE,
+#          dendrogram = "none",
+#          key.title = " Colorkey: \n blue: gen. int. profile fly \n orange: gene effect human",
+#          colorbar_len = 0.5,
+#          row_text_angle = 0,
+#          column_text_angle = -45,
+#          main = " Heatmap of pos. pearson correlation values \n Annotated Genes and nearest neighbors, clust: gen. int. profile fly",
+#          margins = c(30, 30, 70, 30),
+#          showticklabels = FALSE,
+#          file = "hclustering_cross_organism/hclustering_fly_human_heatmap_clustered_flycellcount_withoutanno.html"
+#          )
+
+```
+
+## 17. Hierarchical clustering - gene effect correlation (human)
+
+```{r}
+
+# Create hierarchical clustering vector, based on human gene effect correlations:
+distance_human <- dist(human_spreaded)
+ordered_human<- hclust(distance_human)$order
+# Ordered_human is a vector containing the order of hierarchical clustered columns/rows based on the orgininal matrix and can be used to order both symmetrical matrices according to clusters generated for the human gene effect correlation values
+
+# Clustered matrix for fly cellcount:
+fly_cellcount_clust_human <- fly_cellcount_spreaded[ordered_human, ordered_human]
+
+# Clustered matrix for human:
+human_ordered <- human_spreaded[ordered_human, ordered_human]
+
+# Make sure that both matrices are ordered the same way:
+identical(rownames(fly_cellcount_clust_human), rownames(human_ordered))
+identical(colnames(fly_cellcount_clust_human), colnames(human_ordered))
+# both return TRUE
+
+# Generate common clustered matrix of both clustered matrices
+common_matrix_clustered_human <- fly_cellcount_clust_human
+common_matrix_clustered_human[upper.tri(common_matrix_clustered_human)] <- human_ordered[upper.tri(human_ordered)]
+
+```
+
+## 18. Heatmap of hierarchical clustered matrix (clustering based on human gene effect correlation)
+
+```{r}
+
+common_matrix_clustered_human_matrix <- data.matrix(common_matrix_clustered_human)
+
+heatmap.2(common_matrix_clustered_human_matrix, 
+          Rowv = FALSE,
+          Colv = FALSE,
+          col = c((colorRampPalette(c("darkblue", "white", "darkorange2"))(100))),
+          trace = "none",
+          dendrogram = "none",
+          na.color = "darkorange4")
+
+```
+
+## 19. Interactive heatmap of hierarchical clustered matrix (clustering based on human gene effect correlation), including genegroup annotations
+
+```{r}
+
+# Replace NA values by -1.01 (to make diagonal be plotted in dark blue, instead of white)
+common_matrix_clustered_human_matrix[is.na(common_matrix_clustered_human_matrix)] <- -1.01
+
+# Create a label names vector to plot names with genegroup annotation:
+labelnames_human <- as_tibble(matrix(nrow = 430, ncol = 1)) %>%
+  mutate(V1 = rownames(common_matrix_clustered_human_matrix)) %>%
+  rename(Gene_name = V1) %>% 
+  left_join((orthologues_genegroups_unique %>% select(Gene_name, gene_group)), by = "Gene_name") %>% 
+  mutate(gene_group = ifelse(is.na(gene_group), "no_ann", gene_group)) %>% 
+  unite(col = "gene", Gene_name, gene_group, sep = "__")
+labelnames_human_vec <- labelnames_human[["gene"]]
+
+# Plot heatmap (with row- and column labels): 
+#heatmaply(common_matrix_clustered_human_matrix,
+#          plot_method = "plotly",
+#          colors = c((colorRampPalette(c("darkblue",  "blue3", "white", "darkorange2", "darkorange4"))(50))),
+#          limits = c(-1,1),
+#          Rowv = FALSE,
+#          Colv = FALSE,
+#          dendrogram = "none",
+#          fontsize_row = 10,
+#          fontsize_col = 10,
+#          key.title = " Colorkey: \n blue: gen. int. profile fly \n orange: gene effect human",
+#          colorbar_len = 0.5,
+#          row_text_angle = 0,
+#          column_text_angle = -45,
+#          main = " Heatmap of pos. pearson correlation values \n Annotated Genes and nearest neighbors, clust: gene effect human",
+#          margins = c(30, 30, 70, 30),
+#          labRow = labelnames_human_vec,
+#          labCol = labelnames_human_vec,
+#          file = "hclustering_cross_organism/hclustering_fly_human_heatmap_clustered_human_withanno.html"
+#          )
+
+# Plot heatmap (without row- and column labels): 
+#heatmaply(common_matrix_clustered_human_matrix,
+#          plot_method = "plotly",
+#          colors = c((colorRampPalette(c("darkblue",  "blue3", "white", "darkorange2", "darkorange4"))(50))),
+#          limits = c(-1,1),
+#          Rowv = FALSE,
+#          Colv = FALSE,
+#          dendrogram = "none",
+#          key.title = " Colorkey: \n blue: gen. int. profile fly \n orange: gene effect human",
+#          colorbar_len = 0.5,
+#          row_text_angle = 0,
+#          column_text_angle = -45,
+#          main = " Heatmap of pos. pearson correlation values \n Annotated Genes and nearest neighbors, clust: gene effect human",
+#          margins = c(30, 30, 70, 30),
+#          showticklabels = FALSE,
+#          file = "hclustering_cross_organism/hclustering_fly_human_heatmap_clustered_human_withoutanno.html"
+#          )
+
+```
+

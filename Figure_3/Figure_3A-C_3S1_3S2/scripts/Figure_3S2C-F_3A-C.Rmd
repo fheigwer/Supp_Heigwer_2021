@@ -1,0 +1,407 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## SETUP
+
+```{r setup, include=FALSE}
+
+library(ggpubr)
+library(PRROC)
+library(ggrastr)
+library(patchwork)
+library(ggrepel)
+library(MASS)
+library(tidyverse)
+library(ggpubr)
+
+
+theme_b110<-function(){
+  theme_classic() +
+    theme(
+      axis.text=element_text(size = 10), 
+      axis.title=element_text(size = 10),
+      plot.title = element_text(size = 12,hjust = 0.5,face="bold"),
+      legend.title = element_text(size = 12),
+      legend.text = element_text(size =10),
+      legend.position = "bottom"
+    )
+}
+
+sgi_blue    = '#5087C8'
+sgi_yellow1 = '#F2EE35'
+sgi_yellow2 = '#FED98E'
+b110_grey   = '#808080'
+b110_grey_light   = '#909090'
+b110_transparent_black = alpha('#000000',0.5)
+google_red = '#dd4b39'
+google_green = '#0F9D58'
+google_yellow = '#F4B400'
+google_blue = '#4285F4'
+
+
+```
+
+# Data loader
+
+```{r}
+
+conversion_table<-read_delim("annotations/SYNGENE_target_id_to_modern_symbol_sorted_uniq.txt",delim = "\t") %>% unite(current_symbol_id,current_symbol,targetid,remove = F)
+gold_standard<-read_delim("annotations/manual_annotations_seeds.txt",delim = "\t") %>% unite(current_symbol_id,gene_symbol,targetid)
+genes_to_genegroups<-read_delim("annotations/gene_group_data_fb_2019_02_mod.tsv",delim = "\t") %>% dplyr::select(gene_group=FB_group_name,current_symbol=Group_member_FB_gene_symbol,current_fbgn=Group_member_FB_gene_id)
+
+usable_features <- readRDS("processed_data/usable_features_18112019.rds")
+main_effects_df <- readRDS("processed_data/main_effect_df_181119.rds")
+interaction_vecs<-read_rds("processed_data/interactions_stats_all_feats_df_18112019.rds")
+interaction_vecs %<>% left_join(conversion_table) %>% filter(feature %in% usable_features)
+main_effects_df %<>% left_join(conversion_table) %>% filter(feature %in% usable_features)
+interaction_stats<-interaction_vecs %>% filter(feature=="cells")# %>% dplyr::select(targetid,query_name,mpi) %>% spread(query_name,mpi)
+
+load("processed_data/filtered_data_cells.RData")
+load("processed_data/normalized_data_cells.RData")
+load("processed_data/prediction_table_current.RData")
+
+```
+
+# Example prediction tables for candidate genes
+
+```{r}
+
+genes_of_interest_2 <-  c("endos","Spindly","DCTN-p25","MBD-R2","msps","Rab5","Rab1","svr","Fur1","CG3847","Dp","nocte","pim","RnrS","stg","raskol","Ptp69D","RhoGAP5A","RhoGAPp190","GlcT","MESR4")
+
+data_to_plot <- prediction_table %>% 
+  gather(gene_group, probability,-targetid_fac,-current_symbol,-current_symbol_id,-targetid,-gene_symbol,-converted_id,-vote,-score) %>% 
+  mutate(probability = probability-median(probability)) %>%
+  filter(current_symbol %in% genes_of_interest_2) %>% 
+  group_by(current_symbol) %>% 
+  arrange(desc(probability)) %>% 
+  mutate(idx = 1:n()) %>%
+  mutate(frame=if_else(idx==1,"b","a")) %>%
+  mutate(current_symbol=factor(current_symbol,levels = genes_of_interest_2))
+
+a <- data_to_plot %>%
+  ggplot(aes(y=gene_group,x=current_symbol,fill=probability,col=frame)) +
+    geom_tile(size=1, width=0.9, height=0.9) +
+    scale_fill_gradient(low="white",high = google_red) +
+  scale_color_manual(values = c("white","black"))+
+    theme_b110() +
+      theme(legend.position = "right",legend.direction = "vertical")+
+     theme(axis.text.x = element_text(angle = 45, hjust = 1,size = 10))
+
+ggsave("plots/probability_heatmap_overview.pdf",a,width = 40,height = 20,units = "cm")
+
+```
+
+# Process predictions for "Positive regulaters of Jak/Stat signaling"
+
+```{r}
+
+data_to_plot <- prediction_table %>% 
+  gather(gene_group, probability,-targetid_fac,-current_symbol,-current_symbol_id,-targetid,-gene_symbol,-converted_id,-vote,-score) %>% 
+  mutate(probability = probability-median(probability)) %>%
+  filter(gene_symbol %in% c("CG3847","Dp","stg")) %>% 
+  group_by(gene_symbol) %>% 
+  arrange(desc(probability)) %>% 
+  mutate(idx = 1:n())
+
+a <- data_to_plot %>%
+  ggplot(aes(y=gene_group,x=gene_symbol,fill=probability)) +
+    geom_tile() +
+    scale_fill_gradient(low="white",high = google_red) +
+    theme_b110() +
+      theme(legend.position = "right",legend.direction = "vertical")+
+     theme(axis.text.x = element_text(angle = 45, hjust = 1,size = 6))
+
+b <- data_to_plot %>% 
+  ggplot(aes(x = idx, y = probability)) + 
+    geom_point() + 
+    geom_label_repel(aes(label = gene_group),data = data_to_plot %>% slice_head(n=4),min.segment.length = 0) + 
+    theme_b110() +
+    geom_hline(yintercept = 1/47,col=google_red)+
+    facet_wrap(~gene_symbol,nrow = 3,ncol=1)
+
+ggsave("plots/probability_heatmap_candidate.pdf",a,width = 30,height = 20,units = "cm")
+ggsave("plots/probability_waterfall_candidate.pdf",b,width = 20,height = 12,units = "cm")
+
+```
+
+# Feature profile heatmap 
+
+```{r}
+
+genes_of_interest <- c('endos','Spindly','MBD-R2','msps','APC4','ida')
+
+upperbound=10;lowerbound=-10
+   
+feat_dat<-main_effects_df %>% 
+      dplyr::select(feature,current_symbol,value) %>% 
+      distinct() %>%
+      filter(current_symbol %in% genes_of_interest) %>%
+      ungroup() 
+
+ordx<-feat_dat  %>% arrange(current_symbol) %>% 
+      spread(current_symbol,value,fill = 0) %>% 
+      arrange(feature) %>% 
+      dplyr::select(-feature) %>%
+      dist(method = "euclidean") %>% 
+      hclust(method = "ward.D2") %>% .$order
+
+namesx<-feat_dat  %>% arrange(current_symbol) %>% 
+      spread(current_symbol,value,fill = 0) %>% 
+      arrange(feature) %>% 
+      pull(feature) %>% 
+      .[ordx]
+
+h2<-feat_dat %>% 
+      mutate(feature=factor(feature,levels = namesx),current_symbol = factor(current_symbol,levels = genes_of_interest)) %>%
+      complete(feature,current_symbol) %>%
+      mutate(value=if_else(value>upperbound,upperbound,value),value=if_else(value<(lowerbound),(lowerbound),value)) %>%
+      ggplot(
+        aes(
+          x=feature,
+          y=current_symbol,
+          fill=value)
+      ) + 
+      scale_fill_gradient2(low=google_blue,mid ="white" ,high = google_red,na.value = "white","midpoint" = 0) + #b110_grey
+      geom_tile() + 
+      ylab("target genes") +
+      xlab("features") +
+      ggtitle("morphology profile") +
+      theme_b110() +
+      theme(legend.position = "right",legend.direction = "vertical")+
+     theme(axis.text.x = element_text(angle = 45, hjust = 1,size = 10))
+
+print(h2)
+
+upperbound=6;lowerbound=-6
+ 
+genes_of_interest <- c('drk','Sos','dos','svr','Fur1','sty','RasGAP1')
+
+heat_dat<-    
+interaction_vecs %>% 
+      filter(feature=="cells") %>%
+        dplyr::select(query_name,current_symbol,mpi) %>% 
+        filter(current_symbol %in% genes_of_interest) %>%
+        ungroup() 
+      
+ordx<-heat_dat  %>% arrange(current_symbol) %>% 
+      spread(current_symbol,mpi,fill = 0) %>% 
+      arrange(query_name) %>% 
+      dplyr::select(-query_name) %>%
+      dist(method = "euclidean") %>% 
+      hclust(method = "ward.D2") %>% .$order
+
+namesx<-heat_dat  %>% arrange(current_symbol) %>% 
+      spread(current_symbol,mpi,fill = 0) %>% 
+      arrange(query_name) %>% 
+      pull(query_name) %>% 
+      .[ordx]
+    
+h3<-heat_dat %>% 
+      mutate(query_name=factor(query_name,levels = namesx)) %>%
+      mutate(current_symbol=factor(current_symbol,levels = genes_of_interest)) %>%
+      complete(query_name,current_symbol) %>%
+      mutate(mpi=if_else(mpi>upperbound,upperbound,mpi),mpi=if_else(mpi<(lowerbound),(lowerbound),mpi)) %>%
+      ggplot(
+        aes(
+          x=query_name,
+          y=current_symbol,
+          fill=mpi)
+      ) + 
+      scale_fill_gradient2(low=google_blue,mid ="white" ,high = sgi_yellow2,na.value = "white","midpoint" = 0) + #b110_grey
+      geom_tile() + 
+      ylab("target genes") +
+      xlab("query genes") +
+      ggtitle(paste0("SGI profile PCC=",
+                     (heat_dat %>% 
+                        spread(current_symbol,mpi) %>%
+                        dplyr::select(-query_name) %>%
+                        cor(use = "p",method = "p") %>% 
+                        .[2] %>% round(digits = 3))
+                     )
+              ) +
+      theme_b110() +
+      theme(legend.position = "right",legend.direction = "vertical")+
+     theme(axis.text.x = element_text(angle = 45, hjust = 1,size = 6))
+
+print (h3)
+
+ggsave("../plots/candidate_profile_heatmaps.pdf",h2+h3,width = 20,height = 8,units = "cm")
+```
+
+
+```{r}
+
+Stat_genes <- genes_of_interest <- c('CG3847','Socs36E','dome','hop', 'Stat92E','upd3')
+
+```
+
+# Feature profile heatmap 
+
+```{r}
+
+upperbound=10;lowerbound=-10
+   
+feat_dat<-main_effects_df %>% 
+      dplyr::select(feature,current_symbol,value) %>% 
+      distinct() %>%
+      filter(current_symbol %in% genes_of_interest) %>%
+      ungroup() 
+
+ordx<-feat_dat  %>% arrange(current_symbol) %>% 
+      spread(current_symbol,value,fill = 0) %>% 
+      arrange(feature) %>% 
+      dplyr::select(-feature) %>%
+      dist(method = "euclidean") %>% 
+      hclust(method = "ward.D2") %>% .$order
+
+namesx<-feat_dat  %>% arrange(current_symbol) %>% 
+      spread(current_symbol,value,fill = 0) %>% 
+      arrange(feature) %>% 
+      pull(feature) %>% 
+      .[ordx]
+
+h1<-feat_dat %>% 
+      mutate(feature=factor(feature,levels = namesx),current_symbol = factor(current_symbol,levels = genes_of_interest)) %>%
+      complete(feature,current_symbol) %>%
+      mutate(value=if_else(value>upperbound,upperbound,value),value=if_else(value<(lowerbound),(lowerbound),value)) %>%
+      ggplot(
+        aes(
+          x=feature,
+          y=current_symbol,
+          fill=value)
+      ) + 
+      scale_fill_gradient2(low=google_blue,mid ="white" ,high = google_red,na.value = "white","midpoint" = 0) + #b110_grey
+      geom_tile() + 
+      ylab("target genes") +
+      xlab("features") +
+      ggtitle("morphology profile") +
+      theme_b110() +
+      theme(legend.position = "right",legend.direction = "vertical")+
+     theme(axis.text.x = element_text(angle = 45, hjust = 1,size = 6))
+
+print(h1)
+
+```
+
+
+
+```{r , include=TRUE}
+
+a <- interaction_vecs %>% 
+  filter(gene_symbol %in% Stat_genes,query_name %in% Stat_genes,feature=="cells") %>%
+  dplyr::select(gene_symbol,query_name,mpi) %>%
+  ggplot(aes(x=factor(gene_symbol,levels = Stat_genes),y=factor(query_name,levels = Stat_genes),size=abs(mpi),col=factor(sign(mpi)))) +
+    geom_point() +
+    scale_color_manual(values = c("1"=sgi_yellow1,"-1"=sgi_blue)) +
+    theme_b110() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_size_area(max_size = 10) +
+    xlab("Stat signaling targets") +
+    ylab("Stat signaling queries") +
+    ggtitle("Viability interactions") + 
+    labs(size = "Interaction strength [π]", col ="direction")
+    
+
+b <- main_effects_df %>% 
+  filter(gene_symbol %in% Stat_genes) %>% 
+  select(gene_symbol,feature,value) %>%
+  spread(gene_symbol,value ) %>%
+  select(all_of(Stat_genes)) %>%
+  corrr::correlate() %>%
+  corrr::network_plot(min_cor = 0,curved = F,repel = T,colours = c(google_blue,"white",google_red),legend = T) +
+  ggtitle("Feature profile correlations")
+
+
+p1 <- h1 + b + a +plot_layout(ncol=2,nrow = 2,heights = c(60,40),widths = c(50,50))
+
+ggsave(filename = "plots/CG3847_features_and_interactions.pdf",plot = p1,width = 20,height = 15,units = "cm")
+
+```
+
+# example interaction
+
+```{r}
+plot_example_interaction<-function(tgene="Rheb",qgene="raptor"){
+  fb<-interaction_stats %>% filter(gene_symbol==tgene,query_name==qgene) %>% pull(targetid) %>% .[1]
+  scores<-interaction_stats %>% filter(targetid==fb,query_name==qgene) %>% gather(pirep,piscore,`1`,`2`,`3`,`4`)
+   
+  piscore<- pull(scores,piscore)
+  
+  targetmain <- pull(scores,target_main)
+  
+  querymain<-pull(scores,query_main)
+  
+  target<-pull(scores,gene_symbol)
+  
+  double<-filtered_data %>% filter(targetid==fb,query_name==qgene) %>% pull(value)
+  
+  query<-filtered_data %>% filter(targetid==fb,query_name==qgene) %>% pull(query_name)
+  
+  GI_df<-
+    cbind.data.frame(target,query,"t"=targetmain,"q"=querymain,"tq"=double,"pi"=piscore) %>% 
+    mutate(e=targetmain+querymain) %>% 
+    gather(category,value,-target,-query) %>% 
+    distinct()
+  
+
+  GI_df %>% 
+    mutate(category=factor(category,levels = c("t","q","e","tq","pi"))) %>%
+    group_by(category) %>%
+    mutate(m=mean(value,na.rm=T)) %>%
+    ggplot(aes(x=category,y=m,fill=category)) +
+    geom_bar(stat = "identity",position = "dodge") +
+    geom_point(aes(y=value),pch=19,size=2,col=b110_grey) +
+    geom_hline(yintercept = 0,lty=2) +
+    ylab("interaction score [π]") +
+    xlab("measurement") + 
+    ggtitle(paste0(tgene,' + ',qgene)) +
+    scale_fill_manual(values = c("t"=b110_grey_light,"q"=b110_grey_light,"e"=b110_grey_light,"tq"=b110_grey_light,"pi"=if(mean(piscore,na.rm = T)<0){google_blue}else{google_yellow})) +
+    theme_b110()+ theme(legend.position = "none")
+}
+
+  # plot the raptor <-> Rheb interaction 
+
+plot_example_interaction(tgene = "CG3847",qgene = "dome")
+
+interaction_vecs %>% 
+  filter(gene_symbol %in% Stat_genes,feature=="cells") %>% 
+  select(gene_symbol,query_name,mpi) %>%
+  spread(gene_symbol,mpi ) %>% 
+  select(all_of(Stat_genes)) %>%
+  corrr::correlate() %>%
+  corrr::shave(upper = T) %>%
+  corrr::stretch() %>%
+  dplyr::rename(gene_1=x,gene_2=y) %>%
+  ggplot(aes(y=factor(gene_1,levels = Stat_genes),x=factor(gene_2,levels = Stat_genes),size=abs(r),col=r)) +
+    geom_point() +
+    scale_color_gradient2(high=google_red,mid = "white",low=google_blue) +
+    theme_b110()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+    scale_size_area(max_size = 10) +
+    xlab("Stat signaling members")+
+    ylab("Stat signaling members")+
+    ggtitle("Interaction profile correlations")
+
+main_effects_df %>% 
+  filter(gene_symbol %in% Stat_genes) %>% 
+  select(gene_symbol,feature,value) %>%
+  spread(gene_symbol,value ) %>%
+  select(all_of(Stat_genes)) %>%
+  corrr::correlate() %>%
+  corrr::shave(upper = T) %>%
+  corrr::stretch() %>%
+  dplyr::rename(gene_1=x,gene_2=y) %>%
+  ggplot(aes(y=factor(gene_1,levels = Stat_genes),x=factor(gene_2,levels = Stat_genes),size=abs(r),col=r)) +
+    geom_point() +
+    scale_color_gradient2(high=google_red,mid = "white",low=google_blue) +
+    theme_b110()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+    scale_size_area(max_size = 10) +
+    xlab("Stat signaling members")+
+    ylab("Stat signaling members") +
+    ggtitle("Feature profile correlations")
+```
+

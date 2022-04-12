@@ -1,0 +1,510 @@
+---
+title: "SYNGENE_analysis_viz_figure3_v2"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## SETUP
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggpubr)
+library(PRROC)
+library(ggrastr)
+library(patchwork)
+library(ggrepel)
+
+theme_b110<-function(){
+  theme_classic() +
+  theme(
+    axis.text=element_text(size = 10), 
+    axis.title=element_text(size = 10),
+    plot.title = element_text(size = 12,hjust = 0.5,face="bold"),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size =10),
+    legend.position = "bottom"
+    )
+}
+
+sgi_blue    = '#5087C8'
+sgi_yellow1 = '#F2EE35'
+sgi_yellow2 = '#FED98E'
+b110_grey   = '#808080'
+b110_grey_light   = '#909090'
+b110_transparent_black = alpha('#000000',0.5)
+google_red='#dd4b39'
+google_green='#0F9D58'
+google_yellow='#F4B400'
+google_blue='#4285F4'
+
+```
+
+## Loading cell number data 
+
+```{r}
+usable_features<-readRDS("~/Desktop/GitHub/Supp_Heigwer_2021/sourcedata/wellavg_screen_data/usable_features_18112019.rds")
+main_effects_df <- read_rds("~/Desktop/GitHub/Supp_Heigwer_2021/sourcedata/wellavg_screen_data/main_effect_df_181119.rds")
+interaction_vecs<-read_rds("~/Desktop/GitHub/Supp_Heigwer_2021/sourcedata/wellavg_screen_data/interactions_stats_all_feats_df_18112019.rds")
+translator<-read_delim("annotations/translator.txt",delim = "\t")
+
+```
+
+# get the annotations for safe and all other benchmarks and training (GO terms, gene groups and protein complexes) based on gene_symbol
+
+```{R } 
+
+genes_to_ids<- translator %>% dplyr::select(current_fbgn=converted_id,current_symbol,targetid)
+
+genes_to_GO<-read_delim("annotations/gene_information.txt",delim="\t") %>% dplyr::select(go_id,current_fbgn=fbgn)
+
+GO_to_words<-read_delim("annotations/goterms.txt",delim = "\t")
+
+genes_to_genegroups<-read_delim("annotations/gene_group_data_fb_2019_02_mod.tsv",delim = "\t") %>% dplyr::select(gene_group=FB_group_name,current_symbol=Group_member_FB_gene_symbol,current_fbgn=Group_member_FB_gene_id)
+
+load("annotations/Complexes_from_paper.RData")
+
+gene_group_LUT<-genes_to_genegroups %>% split(.$current_symbol)
+
+gene_GO_LUT<-genes_to_ids %>% left_join(genes_to_GO) %>% dplyr::select(current_symbol,go_id) %>% distinct() %>% split(.$current_symbol)
+
+complex_LUT<-complexes %>% ungroup() %>% dplyr::select(current_fbgn=member,complex) %>% left_join(genes_to_ids) %>% dplyr::select(current_symbol,complex) %>% split(.$current_symbol)
+
+```
+
+## Figure 2A
+
+```{r}
+
+
+gold_genes<-main_effects_df %>% filter(feature %in% usable_features) %>% group_by(targetid) %>% summarise(s=sd(value)) %>% arrange(desc(s)) %>% pull(targetid) %>% .[2:301]
+
+heat_dat<-main_effects_df %>% filter(feature %in% usable_features) %>% filter(targetid %in% gold_genes)
+
+viab_inteactions<-interaction_vecs %>% filter(feature=="cells")
+
+
+viab_heat_dat<-
+  heat_dat %>% 
+    left_join(viab_inteactions %>% dplyr::select(targetid,query_name,int_score=mpi),by = c("targetid")) %>% 
+    dplyr::select(targetid,query_name,int_score) %>% 
+    group_by(targetid,query_name) %>% 
+    summarise(int_score=mean(int_score,na.rm=TRUE)) %>% 
+    ungroup()
+
+ordx<- 
+  heat_dat  %>% 
+    arrange(targetid) %>% 
+    spread(feature,value,fill = 0) %>% 
+    arrange(targetid) %>% 
+    dplyr::select(-targetid,-gene_symbol) %>% 
+    dist(method = "euclidean") %>% 
+    hclust(method = "ward.D2") %>% 
+    .$order
+
+namesx <- 
+  heat_dat  %>% 
+    arrange(targetid) %>% 
+    spread(feature,value,fill = 0) %>% 
+    arrange(targetid) %>% 
+    pull(targetid) %>% 
+    .[ordx]
+
+ordy <- 
+  heat_dat  %>% 
+    arrange(feature) %>% 
+    dplyr::select(-gene_symbol) %>% 
+    spread(targetid,value,fill = 0) %>% 
+    arrange(feature) %>% 
+    dplyr::select(-feature) %>% 
+    dist(method = "euclidean") %>% 
+    hclust(method = "ward.D2") %>% 
+    .$order
+
+namesy <- 
+    heat_dat %>% 
+      arrange(feature) %>% 
+      dplyr::select(-gene_symbol) %>% 
+      spread(targetid,value,fill = 0) %>% 
+      arrange(feature) %>% 
+      pull(feature) %>% 
+      .[ordy]
+
+
+ordyint <-
+  viab_heat_dat %>% 
+    arrange(query_name) %>% 
+    spread(targetid,int_score,fill = 0) %>% 
+    arrange(query_name) %>% 
+    dplyr::select(-query_name) %>% 
+    dist(method = "euclidean") %>% 
+    hclust(method = "ward.D2") %>% 
+    .$order
+
+namesyint <- 
+  viab_heat_dat %>% 
+    arrange(query_name) %>% 
+    spread(targetid,int_score,fill = 0) %>% 
+    arrange(query_name) %>% 
+    pull(query_name) %>% 
+    .[ordyint]
+
+ordxint <- 
+  viab_heat_dat %>% 
+    arrange(targetid) %>% 
+    spread(query_name,int_score,fill = 0) %>% 
+    arrange(targetid) %>% 
+    dplyr::select(-targetid) %>% 
+    dist(method = "euclidean") %>% 
+    hclust(method = "ward.D2") %>% 
+    .$order
+
+namesxint <- 
+  viab_heat_dat %>% 
+    arrange(targetid) %>% 
+    spread(query_name,int_score,fill = 0) %>% 
+    arrange(targetid) %>% 
+    pull(targetid) %>% 
+    .[ordxint]
+
+h1<-heat_dat %>% 
+  mutate(feature=factor(feature,levels = namesy)) %>%
+  mutate(targetid=factor(targetid,levels = namesxint)) %>%
+  complete(feature,targetid) %>%
+  mutate(value=if_else(value>10,10,value),value=if_else(value<(-10),(-10),value)) %>%
+  ggplot(
+    aes(
+      x=feature,
+      y=targetid,
+      fill=value)
+  ) + 
+  scale_fill_gradient2(low=google_blue,mid ="white" ,high = google_red,na.value = b110_grey,"midpoint" = 0) + #b110_grey
+   geom_tile_rast(raster.dpi = 600) + 
+  ylab("target genes") +
+  xlab("morphology features") +
+  ggtitle("Morphology profile clustering") +
+  theme_b110() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+  theme(axis.text.x=element_blank(),axis.ticks.y=element_blank(),axis.text.y=element_blank(),axis.ticks.x=element_blank())
+
+h2<-viab_heat_dat %>% 
+  mutate(query_name=factor(query_name,levels = namesyint)) %>%
+ mutate(targetid=factor(targetid,levels = namesxint)) %>%
+ # mutate(targetid=factor(targetid,levels = namesxint)) %>%
+  complete(query_name,targetid) %>%
+  mutate(int_score=if_else(int_score>8,8,int_score),int_score=if_else(int_score<(-8),(-8),int_score)) %>%
+  ggplot(
+    aes(
+      x=query_name,
+      y=targetid,
+      fill=int_score)
+  ) + 
+  scale_fill_gradient2(low=google_blue,mid ="white" ,high = google_yellow,na.value = "white","midpoint" = 0) + #b110_grey
+  geom_tile_rast(raster.dpi = 600) + 
+  ylab("target genes") +
+  xlab("query genes") +
+  ggtitle("Interaction profile clustering") +
+  theme_b110() +
+  theme(axis.text.x=element_blank(),axis.ticks.y=element_blank(),axis.text.y=element_blank(),axis.ticks.x=element_blank())
+
+p <- h2 + h1 + 
+  plot_layout(widths = c(9, 4))
+ggsave(p,filename = "graphics/figure_2A_heatmaps_globalv3_int_v1.pdf",width = 14, height=12, units="cm")
+ggsave(p,filename = "graphics/figure_2A_heatmaps_globalv3_int_v1.png",width = 14, height=12, units="cm")
+
+ggsave(h1,filename = "graphics/figure_2A_feature_heatmap_globalv2_int.pdf",width = 5, height=14, units="cm")
+ggsave(h2,filename = "graphics/figure_2A_interaction_heatmap_globalv1_int.pdf",width = 10, height=14, units="cm")
+
+########################################################################################################################
+#get the dendrogram and the annotation bar
+########################################################################################################################
+clustx <- viab_heat_dat %>% 
+    arrange(query_name) %>% 
+    spread(query_name,int_score,fill = 0) %>% 
+    arrange(targetid) %>% 
+    dplyr::select(-targetid) %>% 
+    dist(method = "euclidean") %>% 
+    hclust(method = "ward.D2")
+
+translator<-read_delim("annotations/translator.txt",delim="\t")
+gene_group_anno<-read_delim("annotations/gene_group_data_fb_2019_02_mod.tsv",delim="\t") %>% dplyr::select(fbgn=Group_member_FB_gene_id,current_symbol=Group_member_FB_gene_symbol,group=FB_group_name)
+
+mapping<-left_join(data.frame("targetid"=namesx),translator) %>% left_join(gene_group_anno) %>% group_by(targetid) %>% do(head(.,n=1))
+
+mapping %<>% group_by(group) %>% mutate(group2=if_else(n()>4,unique(group),"Other")) %>% ungroup() %>% mutate(group2=if_else(!is.na(group2),group2,"Other"))
+
+pdf(file = "graphics/figure_2A_dendrogram_annotation_int.pdf")
+dend <- as.dendrogram(clustx)
+par(mar = c(4,1,1,12))
+plot(dend, horiz = TRUE,leaflab = "none",xaxt = NULL)
+n_groups <- length(unique(mapping$group2))
+cols_4 <- brewer.pal(n = n_groups, name = "Paired")
+cols_4[6]<-"white"#b110_grey
+col_groups <- cols_4[factor(mapping$group2)]
+colored_bars(col_groups, dend, rowLabels = c( "Gene group"),horiz = T)
+legend("topleft", legend = levels(factor(mapping$group2)), fill = cols_4)
+
+dev.off()
+```
+
+## Figure 2C,D ROC statistics of gene groups, protein families etc.
+  
+With this we want to analyze how well feature or interaction correlations can predict whether 2 genes share a certain annotation.
+  
+```{r}
+
+if(!exists("filtered_corrs")){
+  filtered_corrs<-read_delim("~/Desktop/GitHub/Supp_Heigwer_2021/Figure_1/processed_data/correlation_table_pan_0.3_first3_filtered_genes_v3.txt",delim = "\t")
+}
+if(!exists("filtered_feature_corrs")){
+  filtered_feature_corrs<-read_delim("~/Desktop/GitHub/Supp_Heigwer_2021/Figure_1/processed_data/correlation_feat_table_pan_0.3_first2.txt",delim = "\t")
+}
+if(!exists("filtered_combined_corrs")){
+  filtered_combined_corrs<-read_delim("~/Desktop/GitHub/Supp_Heigwer_2021/Figure_1/processed_data/correlation_table_pan_combined_0.2_first3_v2.txt",delim = "\t")
+}
+
+
+fGG<-function(x){
+  if(!is.null(gene_group_LUT[[x$genex]]) & !is.null(gene_group_LUT[[x$geney]])){
+    if(any(gene_group_LUT[[x$genex]]$gene_group %in% gene_group_LUT[[x$geney]]$gene_group)){
+      return(1)
+    }else{
+        return(0)
+    }
+  }else{
+     return(NA_real_)
+  }
+}
+fGO<-function(x){
+  #print(x)
+  if(!is.null(gene_GO_LUT[[x$genex[1]]]) & !is.null(gene_GO_LUT[[x$geney[1]]])){
+    if(any(gene_GO_LUT[[x$genex[1]]]$go_id %in% gene_GO_LUT[[x$geney[1]]]$go_id)){
+      return(1)
+    }else{
+        return(0)
+    }
+  }else{
+     return(NA_real_)
+  }
+}
+fCO<-function(x){
+  #print(x)
+  if(!is.null(complex_LUT[[x$genex[1]]]) & !is.null(complex_LUT[[x$geney[1]]])){
+    if(any(complex_LUT[[x$genex[1]]]$complex %in% complex_LUT[[x$geney[1]]]$complex)){
+      return(1)
+    }else{
+        return(0)
+    }
+  }else{
+     return(NA_real_)
+  }
+}
+
+gene_grp_prediction_feat<-filtered_feature_corrs %>% 
+  filter(genex %in% names(gene_group_LUT),geney %in% names(gene_group_LUT)) %>% 
+  group_by(genex,geney) %>% 
+  do(mutate(.,sharegrp=fGO(.))) %>% 
+  unnest() %>%
+  drop_na()
+
+gene_grp_prediction_combined<-filtered_combined_corrs %>% 
+  filter(genex %in% names(gene_group_LUT),geney %in% names(gene_group_LUT)) %>% 
+  group_by(genex,geney) %>% 
+  do(mutate(.,sharegrp=fGO(.))) %>% 
+  unnest() %>%
+  drop_na()
+
+gene_grp_prediction_GI<-  filtered_corrs %>% 
+  filter(genex %in% names(gene_group_LUT),geney %in% names(gene_group_LUT)) %>% 
+  group_by(genex,geney) %>% 
+  do(mutate(.,sharegrp=fGO(.))) %>% 
+  unnest() %>%
+  drop_na()
+
+fg_feat <- gene_grp_prediction_feat$r[gene_grp_prediction_feat$sharegrp == 1]
+bg_feat <- gene_grp_prediction_feat$r[gene_grp_prediction_feat$sharegrp == 0]
+
+fg_GI <- gene_grp_prediction_GI$r[gene_grp_prediction_GI$sharegrp == 1]
+bg_GI <- gene_grp_prediction_GI$r[gene_grp_prediction_GI$sharegrp == 0]
+
+fg_combined <- gene_grp_prediction_combined$r[gene_grp_prediction_combined$sharegrp == 1]
+bg_combined <- gene_grp_prediction_combined$r[gene_grp_prediction_combined$sharegrp == 0]
+
+# ROC Curve
+
+roc_feat <- roc.curve(scores.class0 = fg_feat, scores.class1 = bg_feat, curve = T)
+roc_GI <- roc.curve(scores.class0 = fg_GI, scores.class1 = bg_GI, curve = T)
+roc_combined <- roc.curve(scores.class0 = fg_combined, scores.class1 = bg_combined, curve = T)
+
+rocs<-bind_rows(list("morphology"=as.data.frame(roc_feat$curve),"interactions"=as.data.frame(roc_GI$curve),"combined"=as.data.frame(roc_combined$curve)),.id="type") #
+
+names(rocs)=c("type","FPR","REC","COR")
+
+pr_feat <- pr.curve(scores.class0 = fg_feat, scores.class1 = bg_feat, curve = T)
+pr_GI <- pr.curve(scores.class0 = fg_GI, scores.class1 = bg_GI, curve = T)
+pr_combined <- pr.curve(scores.class0 = fg_combined, scores.class1 = bg_combined, curve = T)
+
+prss<-bind_rows(list("morphology"=as.data.frame(pr_feat$curve),"interactions"=as.data.frame(pr_GI$curve),"combined"=as.data.frame(pr_combined$curve)),.id="type")#
+
+names(prss)=c("type","REC","PR","COR")
+
+p1<-rocs %>% 
+  ggplot(aes(x=FPR,y=REC,col=type)) + 
+    geom_line() + 
+    geom_abline(slope=1,intercept = 0,lty=2,lwd=2) + 
+    theme_b110() +
+    coord_fixed() +
+    ggtitle(paste0("feat AUC = ",round(roc_feat$auc,digits=3)," int AUC = ",round(roc_GI$auc,digits=3)," comb AUC = ",round(roc_combined$auc,digits=3)))+ #
+    scale_color_manual(values=c(b110_grey,google_blue,google_red))
+
+p2<-prss %>% 
+  ggplot(aes(x=REC,y=PR,col=type)) + 
+    geom_line() + 
+    geom_abline(slope=0,intercept = 0.1270181,lty=2,lwd=2) + 
+    theme_b110() +
+    coord_fixed() +
+    ggtitle(paste0("feat AUC = ",round(pr_feat$auc.integral,digits=3)," int AUC = ",round(pr_GI$auc.integral,digits=3)," int comb = ",round(pr_combined$auc.integral,digits=3)))+ #
+    scale_color_manual(values=c(b110_grey,google_blue,google_red))
+
+ggsave(p1+p2+plot_layout(ncol=1),filename = "graphics/figure_2C_ROC_analysis_GO.pdf",width = 8,height = 12,units = "cm") #
+
+####################################################################################################################################
+
+gene_comp_prediction_feat<-filtered_feature_corrs %>% 
+  filter(genex %in% names(complex_LUT),geney %in% names(complex_LUT)) %>% 
+  group_by(genex,geney) %>% 
+  do(mutate(.,sharegrp=fCO(.))) %>% 
+  unnest() %>%
+  drop_na()
+
+gene_comp_prediction_combined<-filtered_combined_corrs %>% 
+  filter(genex %in% names(complex_LUT),geney %in% names(complex_LUT)) %>% 
+  group_by(genex,geney) %>% 
+  do(mutate(.,sharegrp=fCO(.))) %>% 
+  unnest() %>%
+  drop_na()
+
+gene_comp_prediction_GI<-filtered_corrs %>% 
+  filter(genex %in% names(complex_LUT),geney %in% names(complex_LUT)) %>% 
+  group_by(genex,geney) %>% 
+  do(mutate(.,sharegrp=fCO(.))) %>% 
+  unnest() %>%
+  drop_na()
+
+fg_feat <- gene_comp_prediction_feat$r[gene_comp_prediction_feat$sharegrp == 1]
+bg_feat <- gene_comp_prediction_feat$r[gene_comp_prediction_feat$sharegrp == 0]
+
+fg_GI <- gene_comp_prediction_GI$r[gene_comp_prediction_GI$sharegrp == 1]
+bg_GI <- gene_comp_prediction_GI$r[gene_comp_prediction_GI$sharegrp == 0]
+
+fg_comb <- gene_comp_prediction_combined$r[gene_comp_prediction_combined$sharegrp == 1]
+bg_comb <- gene_comp_prediction_combined$r[gene_comp_prediction_combined$sharegrp == 0]
+
+# ROC Curve
+
+roc_feat <- roc.curve(scores.class0 = fg_feat, scores.class1 = bg_feat, curve = T)
+roc_GI <- roc.curve(scores.class0 = fg_GI, scores.class1 = bg_GI, curve = T)
+roc_comb <- roc.curve(scores.class0 = fg_comb, scores.class1 = bg_comb, curve = T)
+
+rocs<-bind_rows(list("morphology"=as.data.frame(roc_feat$curve),"interactions"=as.data.frame(roc_GI$curve),"combined"=as.data.frame(roc_comb$curve)),.id="type")
+
+names(rocs)=c("type","FPR","REC","COR")
+
+pr_feat <- pr.curve(scores.class0 = fg_feat, scores.class1 = bg_feat, curve = T)
+pr_GI <- pr.curve(scores.class0 = fg_GI, scores.class1 = bg_GI, curve = T)
+pr_comb <- pr.curve(scores.class0 = fg_comb, scores.class1 = bg_comb, curve = T)
+
+prss<-bind_rows(list("morphology"=as.data.frame(pr_feat$curve),"interactions"=as.data.frame(pr_GI$curve),"combined"=as.data.frame(pr_comb$curve)),.id="type")
+
+names(prss)=c("type","REC","PR","COR")
+
+p1<-rocs %>% 
+  ggplot(aes(x=FPR,y=REC,col=type)) + 
+    geom_line() + 
+    geom_abline(slope=1,intercept = 0,lty=2,lwd=2) + 
+    theme_b110() +
+  coord_fixed() +
+    ggtitle(paste0("feat AUC = ",round(roc_feat$auc,digits=3)," int AUC = ",round(roc_GI$auc,digits=3)," comb AUC = ",round(roc_comb$auc,digits=3)))+ 
+    scale_color_manual(values=c(b110_grey,google_blue,google_red))
+
+p2<-prss %>% 
+  ggplot(aes(x=REC,y=PR,col=type)) + 
+    geom_line() + 
+    geom_abline(slope=0,intercept = 0.1270181,lty=2,lwd=2) + 
+    theme_b110() +
+  coord_fixed() +
+    ggtitle(paste0("feat AUC = ",round(pr_feat$auc.integral,digits=3)," int AUC = ",round(pr_GI$auc.integral,digits=3)," comb AUC = ",round(pr_comb$auc.integral,digits=3)))+ 
+    scale_color_manual(values=c(b110_grey,google_blue,google_red))
+
+ggsave(p1+p2+plot_layout(ncol=1),filename = "graphics/figure_2C_ROC_analysis_COMPLEXES.pdf",width = 8,height = 12,units = "cm")
+
+
+gene_grp_prediction_feat<-filtered_feature_corrs %>% 
+  filter(genex %in% names(gene_group_LUT),geney %in% names(gene_group_LUT)) %>% 
+  group_by(genex,geney) %>% 
+  do(mutate(.,sharegrp=fGG(.))) %>% 
+  unnest() %>%
+  drop_na()
+
+gene_grp_prediction_combined<-filtered_combined_corrs %>% 
+  filter(genex %in% names(gene_group_LUT),geney %in% names(gene_group_LUT)) %>% 
+  group_by(genex,geney) %>% 
+  do(mutate(.,sharegrp=fGG(.))) %>% 
+  unnest() %>%
+  drop_na()
+
+gene_grp_prediction_GI<-  filtered_corrs %>% 
+  filter(genex %in% names(gene_group_LUT),geney %in% names(gene_group_LUT)) %>% 
+  group_by(genex,geney) %>% 
+  do(mutate(.,sharegrp=fGG(.))) %>% 
+  unnest() %>%
+  drop_na()
+
+fg_feat <- gene_grp_prediction_feat$r[gene_grp_prediction_feat$sharegrp == 1]
+bg_feat <- gene_grp_prediction_feat$r[gene_grp_prediction_feat$sharegrp == 0]
+
+fg_GI <- gene_grp_prediction_GI$r[gene_grp_prediction_GI$sharegrp == 1]
+bg_GI <- gene_grp_prediction_GI$r[gene_grp_prediction_GI$sharegrp == 0]
+
+fg_combined <- gene_grp_prediction_combined$r[gene_grp_prediction_combined$sharegrp == 1]
+bg_combined <- gene_grp_prediction_combined$r[gene_grp_prediction_combined$sharegrp == 0]
+
+# ROC Curve
+
+roc_feat <- roc.curve(scores.class0 = fg_feat, scores.class1 = bg_feat, curve = T)
+roc_GI <- roc.curve(scores.class0 = fg_GI, scores.class1 = bg_GI, curve = T)
+roc_combined <- roc.curve(scores.class0 = fg_combined, scores.class1 = bg_combined, curve = T)
+
+rocs<-bind_rows(list("morphology"=as.data.frame(roc_feat$curve),"interactions"=as.data.frame(roc_GI$curve),"combined"=as.data.frame(roc_combined$curve)),.id="type") #
+
+names(rocs)=c("type","FPR","REC","COR")
+
+pr_feat <- pr.curve(scores.class0 = fg_feat, scores.class1 = bg_feat, curve = T)
+pr_GI <- pr.curve(scores.class0 = fg_GI, scores.class1 = bg_GI, curve = T)
+pr_combined <- pr.curve(scores.class0 = fg_combined, scores.class1 = bg_combined, curve = T)
+
+prss<-bind_rows(list("morphology"=as.data.frame(pr_feat$curve),"interactions"=as.data.frame(pr_GI$curve),"combined"=as.data.frame(pr_combined$curve)),.id="type")#
+
+names(prss)=c("type","REC","PR","COR")
+
+p1<-rocs %>% 
+  ggplot(aes(x=FPR,y=REC,col=type)) + 
+    geom_line() + 
+    geom_abline(slope=1,intercept = 0,lty=2,lwd=2) + 
+    theme_b110() +
+    coord_fixed() +
+    ggtitle(paste0("feat AUC = ",round(roc_feat$auc,digits=3)," int AUC = ",round(roc_GI$auc,digits=3)," comb AUC = ",round(roc_combined$auc,digits=3)))+ #
+    scale_color_manual(values=c(b110_grey,google_blue,google_red))
+
+p2<-prss %>% 
+  ggplot(aes(x=REC,y=PR,col=type)) + 
+    geom_line() + 
+    geom_abline(slope=0,intercept = 0.1270181,lty=2,lwd=2) + 
+    theme_b110() +
+    coord_fixed() +
+    ggtitle(paste0("feat AUC = ",round(pr_feat$auc.integral,digits=3)," int AUC = ",round(pr_GI$auc.integral,digits=3)," int comb = ",round(pr_combined$auc.integral,digits=3)))+ #
+    scale_color_manual(values=c(b110_grey,google_blue,google_red))
+
+ggsave(p1+p2+plot_layout(ncol=1),filename = "graphics/figure_2C_ROC_analysis_GG.pdf",width = 8,height = 12,units = "cm") #
+
+```

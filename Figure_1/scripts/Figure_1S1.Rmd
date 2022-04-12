@@ -1,0 +1,215 @@
+---
+title: "Suppl. Figure 1S1"
+author: "Florian Heigwer"
+date: "11/19/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggpubr)
+library(patchwork)
+library(ggrepel)
+library(GGally)
+library(MASS)
+library(ggridges)
+library(cowplot)
+library("dendextend")
+library(dtplyr)
+library(corrr)
+library(RColorBrewer)
+library(ggrastr)
+theme_set(theme_cowplot())
+
+theme_b110<-function(){
+  theme_classic() +
+  theme(
+    axis.text=element_text(size = 10), 
+    axis.title=element_text(size = 10),
+    plot.title = element_text(size = 12,hjust = 0.5,face="bold"),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size =10),
+    legend.position = "bottom"
+    )
+}
+
+
+sgi_blue    = '#5087C8'
+sgi_yellow1 = '#F2EE35'
+sgi_yellow2 = '#FED98E'
+b110_grey   = '#808080'
+b110_grey_light   = '#909090'
+b110_transparent_black = alpha('#000000',0.5)
+google_red='#dd4b39'
+google_green='#0F9D58'
+google_yellow='#F4B400'
+google_blue='#4285F4'
+
+```
+
+## Figure 1S1
+
+```{r}
+load("processed_data/statistically_tested_pi_cells.RData")
+load("processed_data/filtered_data_cells.RData")
+load("processed_data/normalized_data_cells.RData")
+
+feature="nuclear count"
+
+interac_sub<-interaction_stats %>% dplyr::select(gene_symbol,mpi,fdr,fbgn,targetid,target_main,query_main,query_name)
+
+filtered_data_mean<-filtered_data %>% group_by(targetid,query_name) %>% summarise(value=mean(value,na.rm=T))
+
+joined_sub<-filtered_data_mean %>% left_join(interac_sub)
+```
+
+## Figure Supplement Outlier removal explanation
+
+  #plot raw data for the raptor screens
+
+```{r}
+raptor_data<-feature_wise %>% filter(screen %in% c("S060","S062"),kind=="sample") %>% dplyr::select(-value) %>% spread(screen,rawvalue) %>% dplyr::select(S060,S062)
+
+p1 <- raptor_data %>%
+  ggplot(aes(x=S060,y=S062)) + 
+  geom_abline(slope = 1,lty=2) +
+  geom_vline(xintercept = 0,lty=2) +
+  geom_hline(yintercept = 0,lty=2) +
+  geom_point(pch=19,col=b110_transparent_black) + 
+  geom_smooth(col=b110_grey,method="lm") +
+  ylab(paste0(feature," replicate 2")) +
+  xlab(paste0(feature," replicate 1")) +
+  ggtitle(paste0("raptor ","outlier plot")) +
+  scale_color_manual(values = c("normal"=b110_grey_light,"outlier"=sgi_blue))+
+  theme_b110()+
+  stat_cor()
+```
+
+  #plot normalized (score, plate bias, screen bias) data for the raptor screens
+  
+```{r}
+  raptor_data<-feature_wise %>% filter(screen %in% c("S060","S062"),kind=="sample") %>% dplyr::select(-rawvalue) %>% spread(screen,value) %>% dplyr::select(S060,S062)
+
+  mdl<-MASS::rlm(S060~S062,raptor_data) #fit robust linear model for finding regression weights as outlier detection method
+  raptor_data$cd<-mdl$w # set the outlier weight as the distance in the normed data data frame, the weight is inverse correlated to the outlierness of a point
+```
+
+  #plot normalized data colored by outlierness score
+  
+```{r}
+
+p2 <- raptor_data %>%
+    ggplot(aes(x=S060,y=S062,col=cd)) + 
+    geom_abline(slope = 1,lty=2) +
+    geom_vline(xintercept = 0,lty=2) +
+    geom_hline(yintercept = 0,lty=2) +
+    geom_point(pch=19) + 
+    geom_smooth(col=b110_grey,method="lm") +
+    ylab(paste0(feature," replicate 2")) +
+    xlab(paste0(feature," replicate 1")) +
+    ggtitle(paste0("raptor ","outlier plot")) +
+    theme_b110()+
+    stat_cor()
+```
+
+  #plot normalized data colored points as outliers if their weight is less than 20 % of the mean outlier weight
+  
+```{r}
+  
+p3 <- raptor_data %>%
+    mutate(outlier=if_else(cd<1/5*mean(cd,na.rm = T),"outlier","normal")) %>% 
+    ggplot(aes(x=S060,y=S062)) + 
+    geom_abline(slope = 1,lty=2) +
+    geom_vline(xintercept = 0,lty=2) +
+    geom_hline(yintercept = 0,lty=2) +
+    geom_point(aes(col=outlier)) + 
+    geom_smooth(col="black",method="rlm") +
+    ylab(paste0(feature," replicate 2")) +
+    xlab(paste0(feature," replicate 1")) +
+    ggtitle(paste0("raptor ","outlier plot")) +
+    theme_b110()+
+    scale_color_manual(values = c("normal"=b110_grey_light,"outlier"=sgi_blue))
+  
+
+p4 <- p1 + p2 + p3
+
+ggsave("plots/F1_S1_data_norm_outlier_remove.png",width = 24,height = 10,units = "cm")
+ggsave("plots/F1_S1_data_norm_outlier_remove.pdf",width = 24,height = 10,units = "cm")
+```
+
+## Plot the reproducibility of interactions amongst replicates
+
+```{r}
+
+#for raptor
+
+a <- interaction_stats %>% 
+  filter(query_name=="raptor") %>% 
+    ggplot(aes(x=(`1`+`4`)/2,y=(`2`+`3`)/2)) +
+     geom_abline(slope = 1,lty=2) +
+     geom_vline(xintercept = 0,lty=2) +
+     geom_hline(yintercept = 0,lty=2) +
+     geom_point(col=b110_grey) + 
+     geom_smooth(col="black",method="rlm") +
+     stat_cor() +
+     ylab(paste0(feature," replicate 2 [π]")) +
+     xlab(paste0(feature," replicate 1 [π]")) +
+     ggtitle(paste0("raptor ","interaction reproducibility")) +
+     theme_b110()
+
+#for Tor
+
+b <- interaction_stats %>% 
+  filter(query_name=="Tor") %>% 
+    ggplot(aes(x=(`1`+`4`)/2,y=(`2`+`3`)/2)) +
+     geom_abline(slope = 1,lty=2) +
+     geom_vline(xintercept = 0,lty=2) +
+     geom_hline(yintercept = 0,lty=2) +
+     geom_point(col=b110_grey) + 
+     geom_smooth(col="black",method="rlm") +
+     stat_cor() +
+     ylab(paste0(feature," replicate 2 [π]")) +
+     xlab(paste0(feature," replicate 1 [π]")) +
+     ggtitle(paste0("Tor ","interaction reproducibility")) +
+     theme_b110()
+
+#for E(Pc)
+
+c <- interaction_stats %>% 
+  filter(query_name=="E(Pc)") %>% 
+    ggplot(aes(x=(`1`+`4`)/2,y=(`2`+`3`)/2)) +
+     geom_abline(slope = 1,lty=2) +
+     geom_vline(xintercept = 0,lty=2) +
+     geom_hline(yintercept = 0,lty=2) +
+     geom_point(col=b110_grey) + 
+     geom_smooth(col="black",method="rlm") +
+     stat_cor() +
+     ylab(paste0(feature," replicate 2 [π]")) +
+     xlab(paste0(feature," replicate 1 [π]")) +
+     ggtitle(paste0("E(Pc) ","interaction reproducibility")) +
+     theme_b110()
+
+#for brm
+
+d <- interaction_stats %>% 
+  filter(query_name=="brm") %>% 
+    ggplot(aes(x=(`1`+`4`)/2,y=(`2`+`3`)/2)) +
+     geom_abline(slope = 1,lty=2) +
+     geom_vline(xintercept = 0,lty=2) +
+     geom_hline(yintercept = 0,lty=2) +
+     geom_point(col=b110_grey) + 
+     geom_smooth(col="black",method="rlm") +
+     stat_cor() +
+     ylab(paste0(feature," replicate 2 [π]")) +
+     xlab(paste0(feature," replicate 1 [π]")) +
+     ggtitle(paste0("brm ","interaction reproducibility")) +
+     theme_b110()
+
+
+e <-a+b+c+d
+
+ggsave("plots/F1_S1_data_norm_interaction_corr.png",e,width = 24,height = 24,units = "cm")
+ggsave("plots/F1_S1_data_norm_interaction_corr.pdf",e,width = 24,height = 24,units = "cm")
+```
+
+

@@ -1,0 +1,1523 @@
+---
+title: "scRNA-CDK-CSN"
+author: "F. Heigwer"
+date: "2/3/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyverse)
+library(Seurat)
+library(scran)
+library(patchwork)
+library(DESeq2)
+
+library(IHW)
+library(slingshot)
+library(vsn)
+library(pheatmap)
+library(SeuratWrappers)
+library(velocyto.R)
+```
+
+
+## B110 Theme
+
+```{r theme, include=FALSE}
+
+theme_b110 <- function(){
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 16), 
+    axis.title = element_text(size = 16),
+    plot.title = element_text(size = 22,hjust = 0.5,face = "bold"),
+    legend.title = element_text(size = 22),
+    legend.text = element_text(size = 16),
+    legend.position = "bottom"
+    )
+}
+
+sumfun <- function(x){
+  sum(x != 0) * 100 / length(x)
+}
+
+
+data_summary <- function(x) {
+   m <- mean(x)
+   ymin <- m - sd(x)
+   ymax <- m + sd(x)
+   return(c(y = m,ymin = ymin, ymax = ymax))
+}
+
+```
+
+## B110 Colors
+
+```{r colors}
+
+sgi_blue    = '#5087C8'
+sgi_yellow1 = '#F2EE35'
+sgi_yellow2 = '#FED98E'
+b110_grey   = '#808080'
+b110_grey_light   = '#909090'
+b110_transparent_black = scales::alpha('#000000',0.5)
+
+gblue = '#4285F4'
+ggreen = '#0F9D58'
+gred = '#DB4437'
+gyellow = '#F4B400'
+
+google_red = '#dd4b39'
+google_green = '#0F9D58'
+google_yellow = '#F4B400'
+google_blue = '#4285F4'
+
+```
+
+## Load the data
+
+```{r data_loading,eval=FALSE}
+
+data_dirs = c("CSN5RLUC_1" = "/Volumes/EXTHD0343/single_cell_transcriptomics/TX16_1_3runs/outs/filtered_feature_bc_matrix/",
+              "CDK2RLUC_1" = "/Volumes/EXTHD0343/single_cell_transcriptomics/TX16_2_3runs/outs/filtered_feature_bc_matrix/",
+              "RLUCRLUC_1" = "/Volumes/EXTHD0343/single_cell_transcriptomics/TX16_3_3runs/outs/filtered_feature_bc_matrix/",
+              "CSN5CDK2_1" = "/Volumes/EXTHD0343/single_cell_transcriptomics/TX16_4_3runs/outs/filtered_feature_bc_matrix/",
+              "CSN8RLUC_2" = "/Volumes/EXTHD0343/single_cell_transcriptomics/TX16_5_3runs/outs/filtered_feature_bc_matrix/",
+              "CDK2RLUC_2" = "/Volumes/EXTHD0343/single_cell_transcriptomics/TX16_6_3runs/outs/filtered_feature_bc_matrix/",
+              "RLUCRLUC_2" = "/Volumes/EXTHD0343/single_cell_transcriptomics/TX16_7_3runs/outs/filtered_feature_bc_matrix/",
+              "CSN8CDK2_2" = "/Volumes/EXTHD0343/single_cell_transcriptomics/TX16_8_3runs/outs/filtered_feature_bc_matrix/"
+              )
+
+# Load the each dataset
+data_object <- Read10X(data.dir = data_dirs)
+
+# Initialize the Seurat object with the raw (non-normalized data).
+data_object <-  CreateSeuratObject(
+                        counts = data_object, 
+                        project = "SGI", 
+                        min.cells = 30, # filter genes that are non-zero in at least 30 cells (approx. 0.001 %)
+                        min.features = 200, # filter cells such that they contain at least 200 detected genes
+                        names.field = c(1,2),
+                        names.delim = "_")
+
+```
+
+  ## QC
+
+```{r standard_cell_QC, echo=T,eval=FALSE}
+
+data_object[["percent.mt"]] <- PercentageFeatureSet(data_object, pattern = "^mt:")
+
+data_object@meta.data %<>% 
+  rownames_to_column() %>%
+  separate(orig.ident, c("sample","replicate"), remove = F) %>% 
+  dplyr::mutate(type = if_else(sample %in% c("CSN5RLUC","CSN8RLUC"),"CSN",
+                  if_else(sample %in% c("CSN5CDK2","CSN8CDK2"),"DOUBLE",
+                    if_else(sample == "RLUCRLUC","CTRL","CDK2")))) %>% 
+  column_to_rownames()
+
+plot1 <- 
+  FeatureScatter(data_object, feature1 = "nCount_RNA", feature2 = "percent.mt",group.by = "orig.ident") + 
+    scale_x_log10() + 
+    geom_vline(xintercept = 2500) + 
+    geom_hline(yintercept = 10)
+
+plot2 <- 
+  FeatureScatter(data_object, feature1 = "nCount_RNA", feature2 = "nFeature_RNA",group.by = "orig.ident") + 
+  geom_vline(xintercept = 2500 ) + 
+  geom_hline(yintercept = c(200,6000) )
+
+
+data_object_filtered <- subset(data_object, subset = nFeature_RNA > 200 & nFeature_RNA < 6000 & percent.mt < 10 & nCount_RNA > 2500)
+
+```
+
+## subsetting the data
+
+```{r}
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+plot3 <- 
+  FeatureScatter(data_object_filtered, feature1 = "nCount_RNA", feature2 = "percent.mt",group.by = "orig.ident") + 
+    scale_x_log10() + 
+    geom_vline(xintercept = 2500) + 
+    geom_hline(yintercept = 10)
+
+plot4 <- 
+  FeatureScatter(data_object_filtered, feature1 = "nCount_RNA", feature2 = "nFeature_RNA",group.by = "orig.ident") + 
+  geom_vline(xintercept = 2500 ) + 
+  geom_hline(yintercept = c(200,6000) )
+
+#plot1 + plot2 + 
+  
+plot3 + plot4
+
+```
+
+## Normalization
+
+```{r}
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered <- NormalizeData(data_object_filtered, normalization.method = "LogNormalize", scale.factor = 10000)
+
+#alternative normalizeation using scran and scater as proposed in the best practice paper -> does not majorly impact outcome
+#raw_data <- GetAssayData(data_object_filtered,slot = "counts") %>% as.matrix()
+#size_factors <- scran::computeSumFactors(raw_data)
+#normed_data <- scater::normalizeCounts(raw_data,size_factors = size_factors)
+#normed_data_seurat <- Seurat::CreateAssayObject(normed_data)
+#data_object_filtered <- SetAssayData(data_object_filtered,slot = "data", normed_data_seurat@data)  
+```
+
+## Find highly-variable genes
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered <- FindVariableFeatures(data_object_filtered, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(data_object_filtered), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(data_object_filtered)
+plot1 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+
+plot1
+```
+
+## scaling the data
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+all.genes <- rownames(data_object_filtered)
+data_object_filtered <- ScaleData(data_object_filtered, features = all.genes)
+
+```
+
+## perform PCA as dimensionality reduction
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered <- RunPCA(data_object_filtered, features = VariableFeatures(object = data_object_filtered))
+#data_object_filtered <- RunPCA(data_object_filtered, features = all.genes)  ## could not be perfect as it seems to separate replicates where they should be integrated based on scran normalized data
+
+DimPlot(data_object_filtered, reduction = "pca",dims = c(1,2))
+
+DimHeatmap(data_object_filtered, dims = 1:4, cells = 500, balanced = TRUE)
+
+ElbowPlot(data_object_filtered)
+
+```
+
+## cluster cells
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered <- FindNeighbors(data_object_filtered, dims = 2:10)
+data_object_filtered <- FindClusters(data_object_filtered, resolution = 0.5)
+
+```
+
+## run umap on the first 10 PCs
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered <- RunUMAP(data_object_filtered, dims = 2:10)
+data_object_filtered <- RunTSNE(data_object_filtered, dims = 2:10)
+
+a <- DimPlot(data_object_filtered, reduction = "umap",group.by = "orig.ident")
+
+b <- DimPlot(data_object_filtered, reduction = "umap",group.by = "replicate")
+
+c <- DimPlot(data_object_filtered, reduction = "umap",group.by = "seurat_clusters")
+
+c <- LabelClusters(plot = c, id = 'seurat_clusters')
+
+d <- DimPlot(data_object_filtered, reduction = "umap",group.by = "type") 
+
+a + b + c + d
+
+ggsave("clustering-PC1.png")
+```
+
+## plot some gene onto the umap exploratirily
+
+```{r} 
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+DefaultAssay(object = data_object_filtered) <- "RNA"
+
+FeaturePlot(data_object_filtered, reduction = "umap", features = c("geminin","aurB","sti","ncd"), slot = "data")
+
+ggsave("cycle_genes-PC1.png")
+
+FeaturePlot(data_object_filtered, reduction = "umap", features = c("sty","Thor","spz","Pvr"), slot = "scale.data")
+
+ggsave("Rastor_genes-PC1.png")
+
+FeaturePlot(data_object_filtered, reduction = "umap", features = c("Drs","AttD","CG15347","spz"), slot = "scale.data")
+
+ggsave("SASP_genes-PC1.png")
+
+FeaturePlot(data_object_filtered, reduction = "umap", features = c("CycE"), slot = "data")
+
+ggsave("CyCE_genes-PC1.png")
+
+FeaturePlot(data_object_filtered, reduction = "umap", features = c("nCount_RNA","nFeature_RNA","percent.mt","Hsp26"))
+
+ggsave("QC_genes-PC1.png")
+
+f <- FeaturePlot(data_object_filtered, reduction = "umap", features = c("Drs"), slot = "data")
+
+d + f
+
+ggsave("Samples_Drs_Sergi_genes-PC1.svg")
+
+```
+
+## Group mirrored clusters into once already giving them some fucntional annotations
+
+```{r} 
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered@meta.data %<>% 
+   rownames_to_column() %>%
+  dplyr::mutate(sub_type = if_else(seurat_clusters %in% c(7,5),"mitotic",
+                            if_else(seurat_clusters %in% c(3,8,6),"interaction",
+                                    if_else(seurat_clusters %in% c(0,1),"inner_intermed",
+                                            if_else(seurat_clusters %in% c(2),"outer_intermed","death-mt-rich"))))) %>%
+  column_to_rownames()
+
+set.seed(12345)
+
+sampled_cells <- metadata_as_data_frame %>%
+  group_by(type) %>%
+  sample_n(1600) %>%
+  pull(rowname)
+
+sub_sampled <-subset(data_object_filtered,cells=sampled_cells)
+
+a <- Seurat::DimPlot(sub_sampled, reduction = "umap",group.by = "type",cols = scales::alpha(c('red','darkgreen','brown','purple'),alpha = 0.5)) 
+
+#b <- Seurat::DimPlot(data_object_filtered, reduction = "umap",group.by = "sister_clusters") 
+
+#b <- LabelClusters(plot = b, id = 'sister_clusters')
+
+b <- Seurat::DimPlot(sub_sampled, reduction = "umap",group.by = "sub_type",cols = c("darkgreen",ggreen,gyellow,gred,gblue))
+
+b <- LabelClusters(plot = b, id = 'sub_type')
+
+c <- FeaturePlot(sub_sampled, reduction = "umap", features = c("Drs"), slot = "data")
+
+d <- FeaturePlot(sub_sampled, reduction = "umap", features = c("aurB"), slot = "data")
+
+
+a  + b + c +d
+
+ggsave("type_clusters-PC1.png")
+
+ggsave("type_clusters-PC1.pdf")
+
+#saveRDS(data_object_filtered, file = "./data_object_filtered_together-PC1.rds")
+
+
+```
+
+#Differential Cluster compositions
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds.rds")
+}
+
+metadata_as_data_frame <- 
+  data_object_filtered@meta.data %>% 
+  rownames_to_column() %>% 
+  as_tibble() %>%
+  dplyr::mutate(sub_type = factor(sub_type,levels = c("mitotic","inner_intermed","outer_intermed","interaction","death-mt-rich"),ordered = T)) %>%
+  dplyr::mutate(type = factor(type,levels = c("CTRL","CDK2","CSN","DOUBLE"),ordered = T))
+
+# check properties and different distributions of sister clusters throughout different samples and replicates
+
+a <- metadata_as_data_frame %>%
+  ggplot(aes(type)) +
+    geom_bar(stat = "count",position = "fill") +
+    theme_b110() +
+    scale_fill_manual(values = c(gblue,gred))
+
+b <- metadata_as_data_frame %>%
+  ggplot(aes(replicate)) +
+    geom_bar(stat = "count",position = "fill") +
+    theme_b110() +
+    scale_fill_manual(values = c(gblue,gred))
+    
+c <- metadata_as_data_frame %>%
+  ggplot(aes(type)) +
+    geom_bar(stat = "count") +
+    theme_b110() +
+    scale_fill_manual(values = c(gblue,gred))
+    
+a + b + c
+
+# there is no significant difference between different sample perturbations or replicates
+
+# lets check to different cluster distributions as marked by the different clusterings
+
+a <- metadata_as_data_frame %>%
+  ggplot(aes(type,fill = sub_type)) +
+    geom_bar(stat = "count",position = "fill") + 
+    theme_b110() +
+   #scale_fill_brewer(palette = "Set1")+
+   scale_fill_manual(values = c(gyellow,ggreen,b110_grey_light,gblue,gred)) +
+    facet_wrap(~replicate, scales = "free")
+    
+a #+ b + patchwork::plot_layout(ncol = 1,nrow = 2)    
+
+ggsave("groups_by_type-PC1.png")
+ggsave("groups_by_type-PC1.pdf")
+
+# the genetic interactions favors a trend that is onset aleady in the CSN knockout samples and keeps stable over different replicates and also the different left and right clusters. This is independent from the two sister clusters and also of the replicate. The phenotype is alway the same. Mitotic cells become less and the interation cell type become very much more.
+
+d <- DimPlot(data_object_filtered, reduction = "umap",split.by = "type") 
+
+d
+
+ggsave("cells_umap_type-PC1.png")
+
+# next we check for some technical confounders if they confound the clusters
+
+ metadata_as_data_frame %>%
+   select(type,replicate,sister_clusters,sub_type,nCount_RNA,nFeature_RNA,percent.mt) %>% 
+   gather(data_type,value,-type,-replicate,-sister_clusters,-sub_type) %>%
+  ggplot(aes(x = sister_clusters, y = value, fill = sister_clusters)) +
+    geom_violin() + 
+    theme_b110() +
+    scale_fill_manual(values = c(gblue,gred)) +
+    facet_wrap(~ data_type + replicate, scales = "free",nrow = 3,ncol = 2)
+  
+ # -> there are no differences in QC between left and right and replicates
+
+  metadata_as_data_frame %>%
+   select(type,replicate,sister_clusters,sub_type,nCount_RNA,nFeature_RNA,percent.mt) %>% 
+   gather(data_type,value,-type,-replicate,-sister_clusters,-sub_type) %>%
+  ggplot(aes(x = sub_type, y = value, fill = sub_type)) +
+    geom_violin() + 
+    theme_b110() +
+    scale_fill_manual(values = c(gred, ggreen, gblue, gyellow, b110_grey_light)) +
+    facet_wrap(~ data_type + replicate, scales = "free",nrow = 3,ncol = 2)
+
+# -> there are no differences in QC between different subclusters and replicates
+  
+  metadata_as_data_frame %>%
+   select(type,replicate,sister_clusters,sub_type,nCount_RNA,nFeature_RNA,percent.mt) %>% 
+   gather(data_type,value,-type,-replicate,-sister_clusters,-sub_type) %>%
+  ggplot(aes(x = type, y = value, fill = type)) +
+    geom_violin() + 
+    theme_b110() +
+    scale_fill_manual(values = c(gred, ggreen, gblue, gyellow, b110_grey_light)) +
+    facet_wrap(~ data_type + replicate, scales = "free",nrow = 3,ncol = 2)
+
+ # -> there are no differences in QC between different treatments and replicates
+
+  metadata_as_data_frame %>%
+   select(type,replicate,sister_clusters,sub_type,nCount_RNA,nFeature_RNA,percent.mt) %>% 
+   gather(data_type,value,-type,-replicate,-sister_clusters,-sub_type) %>%
+  ggplot(aes(x = type, y = value, fill = replicate)) +
+    geom_violin(position =  position_dodge(1)) + 
+    theme_b110() +
+    scale_fill_manual(values = c(gred, ggreen, gblue, gyellow, b110_grey_light)) +
+    facet_wrap(~ data_type , scales = "free",nrow = 3,ncol = 2)
+
+ # -> the replicates are considerably different but the samples are very much equal in terms of quality
+ 
+```
+
+# Lets do some differential expression analysis
+
+We want to answer the following questions:
+
+  1. Which are the genes that deviate between the two sister clusters and do they help to identify these clusters.
+  
+  2. Which are the marker genes that are specifically expressed in each sub clusters. Are these hinting towards their identity?
+  
+  3. Which are the genes specifically upregulated in the cell clusters upon combinatorial knockout.
+    a. in the clusters that are shared between all treatments.
+    b. in the clusters that are new because of the double treatment.
+    
+At first we call differentially expressed genes between the two sister clusters
+
+```{r }
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+Idents(data_object_filtered) <- "sister_clusters"
+
+DE_genes <- FindMarkers(data_object_filtered, ident.1 = "left",ident.2 = "right", test.use = "DESeq2", max.cells.per.ident = 50)
+
+DE_genes %<>% 
+  rownames_to_column() %>%
+  as_tibble() 
+
+DE_genes %>%
+  ggplot(aes(x = avg_logFC, y = -log10(p_val), label = rowname)) +
+    geom_point() +
+    theme_b110() +
+    ggrepel::geom_label_repel(data = subset(DE_genes, abs(avg_logFC) > 0.9 & p_val_adj < 0.05))
+
+```
+
+# lets check what is different in the mitotic clusters versus all others
+
+```{r }
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+Idents(data_object_filtered) <- "sub_type"
+
+DE_genes <- FindMarkers(data_object_filtered, ident.1 = "mitotic", test.use = "DESeq2", max.cells.per.ident = 50)
+
+DE_genes %<>% 
+  rownames_to_column() %>%
+  as_tibble() 
+
+DE_genes %>%
+  ggplot(aes(x = avg_logFC, y = -log10(p_val), label = rowname)) +
+    geom_point() +
+    theme_b110() +
+    ggrepel::geom_label_repel(data = subset(DE_genes, abs(avg_logFC) > 0.9 & p_val_adj < 0.05)) +
+    xlim(-1,2)
+
+ggsave("DE_genes_mitotic-PC1.png")
+
+
+```
+
+
+# ! lets check what is different in the interaction clusters versus all others
+
+```{r }
+require(ggrastr)
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+Idents(data_object_filtered) <- "sub_type"
+    
+DE_genes <- FindMarkers(data_object_filtered, ident.1 = "interaction", test.use = "DESeq2", max.cells.per.ident = 50)
+
+DE_genes %<>% 
+  rownames_to_column() %>%
+  as_tibble() 
+
+this_data <- DE_genes %>%
+  mutate(significant = if_else(p_val_adj<=0.05,"significant","non-significant")) 
+  
+  
+  ggplot(this_data,aes(x = avg_logFC, y = -log10(p_val), label = rowname)) +
+    geom_point_rast(data = subset(this_data,significant=="non-significant"),alpha=0.3,size=3,aes(col=significant)) +
+    geom_point(data = subset(this_data,significant=="significant"),size=3,aes(col=significant)) +
+    ggrepel::geom_label_repel(data = subset(DE_genes, abs(avg_logFC) > 0.9 & p_val_adj < 0.05))+
+    scale_color_manual(values = c(b110_grey_light,google_blue)) + 
+    theme_b110() 
+
+ggsave("interaction_DE_genes-PC1.pdf")
+
+#lets pull out the up-regulated genes for GSEA
+
+DE_genes %>% 
+  filter(p_val_adj<0.2, avg_logFC>0) %>%
+  pull(rowname)
+```
+
+# gene signature enrichment analysis
+
+using the package msigdbr 7.1.1 and fgsea in tandem
+
+We perform gene set enrichment analysis using the Broad Institute's [GSEA](http://software.broadinstitute.org/gsea/index.jsp) [@pmid17644558]. An R version of the algorithm is implemented in the `fgsea` algorithm [@Sergushichev060012], which we use for analysis.
+
+We want to visualize the results as a barcode plot. `fgsea` already implements a nice barcode plot, which we cusotomize a bit to adapt it according to our expectations.
+
+```{r, results='hide', warning=F, message=F}
+custom_barcode_plot <- function(df, sig){
+  ## named vector of gene-level stats
+  stat_vector <- setNames(df$t, df$Symbol)
+  ## genes in signature
+  sig_genes <- m_list[[sig]]
+  
+  ## generate barcode plot
+  bc_plot <- plotEnrichment(sig_genes, stat_vector)
+  
+  ## remove unwanted layers
+  bc_plot$layers <- list()
+  
+  ## add barcode at the bottom
+  lowest_pos <- min(bc_plot$data[,2])
+  dash_length <- abs(purrr::reduce(range(bc_plot$data[,2]), `-`)*0.1)
+  middle <- which.min(abs(sort(df$t, decreasing=T)))
+  
+  bc_plot_custom <- bc_plot + geom_segment(aes(x=x, xend=x), y=lowest_pos,
+                           yend=lowest_pos-dash_length) + 
+    geom_line(colour='#4daf4a') + 
+    geom_hline(yintercept=lowest_pos, colour='#cccccc') + 
+    geom_hline(yintercept=0, colour='#cccccc') + xlab('') +
+    theme_classic() +
+    geom_tile(data=tibble(rank=1:length(stat_vector), 
+                          y=lowest_pos-(1.25*dash_length)), 
+              aes(x=rank, y=y, fill=rank),
+                  width=1,
+                  height=0.5*dash_length) +
+    scale_fill_gradient2(low ='#b2182b', high='#2166ac', 
+                         mid='#f7f7f7', midpoint = middle) + 
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    theme(panel.grid=element_blank(), 
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          legend.position = 'none') + 
+    ggtitle(paste(sig, 'signature')) +
+    ylab('Enrichment score')
+  
+  return(bc_plot_custom)
+}
+```
+
+barcode plots
+
+```{r}
+require(fgsea)
+require(msigdbr)
+
+#first we get the recent gene set expression signatures
+
+m_df <- msigdbr(species = "Drosophila melanogaster", category = "H")
+head(m_df)
+
+#format them for fgsea
+
+m_list = m_df %>% split(x = .$gene_symbol, f = .$gs_name)
+
+this_dat<- DE_genes %>% select(Symbol=rowname,stat=avg_logFC) %>% deframe()
+
+fgsea_hallmark <- fgsea(pathways=m_list, stats=this_dat, nperm=1000)
+fgsea_hallmarktdy <- fgsea_hallmark %>%
+  as_tibble() %>%
+  arrange(desc(NES))
+
+fgsea_hallmarktdy %>% 
+  arrange(padj) %>%
+  head(.,20) %>%
+  ggplot(aes(reorder(pathway, NES), NES)) +
+  geom_col(aes(fill=padj<0.05)) +
+  coord_flip() +
+  labs(x="Pathway", y="Normalized Enrichment Score",
+       title="Hallmark pathways NES from GSEA") + 
+  theme_b110()+
+  scale_fill_manual(values = c(b110_grey,google_blue))
+
+ggsave("interaction-DEgenes-enrichmentfgsea-overview-PC1.pdf",width = 20,height = 40)
+
+up_fgsea <- fgsea_hallmark %>% arrange(-NES)
+this_data<- DE_genes %>% select(Symbol=rowname,t=avg_logFC)
+bc_plots_up <- map(c(2,7), function(j){#nrow()
+  bcp <- custom_barcode_plot(this_data, up_fgsea$pathway[j]) + 
+    annotate('text', x=Inf , y=Inf, hjust=1, vjust=1, 
+             label=paste('NES =', round(up_fgsea$NES[j], 2), 
+                         '\nFDR =', round(up_fgsea$padj[j], 3)))
+  
+  return(bcp)
+})
+
+## plot to canvas
+purrr::reduce(c(bc_plots_up), `+`) + plot_layout(ncol=2)
+
+ggsave("signature_enrichment_interaction_up_2important.pdf")
+```
+
+# lets check what is different in the inner_intermed clusters versus all others
+
+```{r }
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+Idents(data_object_filtered) <- "sub_type"
+
+DE_genes <- FindMarkers(data_object_filtered, ident.1 = "inner_intermed", test.use = "DESeq2", max.cells.per.ident = 50)
+
+DE_genes %<>% 
+  rownames_to_column() %>%
+  as_tibble() 
+
+DE_genes %>%
+  ggplot(aes(x = avg_logFC, y = -log10(p_val), label = rowname)) +
+    geom_point() +
+    theme_b110() +
+    ggrepel::geom_label_repel(data = subset(DE_genes, abs(avg_logFC) > 0.5 & p_val_adj < 0.05))
+
+```
+
+
+# lets check what is different in the outer_intermed clusters versus all others
+
+```{r }
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+Idents(data_object_filtered) <- "sub_type"
+
+DE_genes <- FindMarkers(data_object_filtered, ident.1 = "outer_intermed", test.use = "DESeq2", max.cells.per.ident = 50)
+
+DE_genes %<>% 
+  rownames_to_column() %>%
+  as_tibble() 
+
+DE_genes %>%
+  ggplot(aes(x = avg_logFC, y = -log10(p_val), label = rowname)) +
+    geom_point() +
+    theme_b110() +
+    ggrepel::geom_label_repel(data = subset(DE_genes, abs(avg_logFC) > 0.5 & p_val_adj < 0.2))
+
+```
+
+
+# lets check what is different in the outer_intermed clusters versus all others
+
+```{r }
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+Idents(data_object_filtered) <- "sub_type"
+
+DE_genes <- FindMarkers(data_object_filtered, ident.1 = "death-mt-rich", test.use = "DESeq2", max.cells.per.ident = 50)
+
+DE_genes %<>% 
+  rownames_to_column() %>%
+  as_tibble() 
+
+DE_genes %>%
+  ggplot(aes(x = avg_logFC, y = -log10(p_val), label = rowname)) +
+    geom_point() +
+    theme_b110() +
+    ggrepel::geom_label_repel(data = subset(DE_genes, abs(avg_logFC) > 0.5 & p_val_adj < 0.2)) +
+    ylim(c(0,20))
+
+```
+
+
+
+# lets check which genes are different depending on the perturbation DOUBLE vs. CSN for all groups
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+Idents(data_object_filtered) <- "type"
+
+DE_genes <- FindMarkers(data_object_filtered, ident.1 = "DOUBLE",ident.2 = "CSN", test.use = "DESeq2", max.cells.per.ident = 50)
+
+DE_genes %<>% 
+  rownames_to_column() %>%
+  as_tibble() %>%
+  mutate(p_val = if_else(is.na(p_val),1e-10,p_val))
+
+DE_genes %>%
+  ggplot(aes(x = avg_logFC, y = -log10(p_val), label = rowname)) +
+    geom_point() +
+    theme_b110() +
+    ggrepel::geom_label_repel(data = subset(DE_genes, avg_logFC > sort(avg_logFC,decreasing = T)[20])) +
+    ggrepel::geom_label_repel(data = subset(DE_genes, avg_logFC < sort(avg_logFC,decreasing = F)[20])) 
+
+```
+
+# lets check which genes are different depending on the perturbation DOUBLE vs. CDK2 for all groups
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+Idents(data_object_filtered) <- "type"
+
+DE_genes <- FindMarkers(data_object_filtered, ident.1 = "DOUBLE",ident.2 = "CDK2", test.use = "DESeq2", max.cells.per.ident = 50)
+
+DE_genes %<>% 
+  rownames_to_column() %>%
+  as_tibble() %>%
+  mutate(p_val = if_else(is.na(p_val),1e-10,p_val))
+
+DE_genes %>%
+  ggplot(aes(x = avg_logFC, y = -log10(p_val), label = rowname)) +
+    geom_point() +
+    theme_b110() +
+    ggrepel::geom_label_repel(data = subset(DE_genes, avg_logFC > sort(avg_logFC,decreasing = T)[20])) +
+    ggrepel::geom_label_repel(data = subset(DE_genes, avg_logFC < sort(avg_logFC,decreasing = F)[20]))# +
+    #ylim(c(0,20))
+
+```
+
+# as an alternative we can analyze spatially restricted cells by looking at the per cent of cell expressing a gene other then 0
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+raw_counts <- data_object_filtered$RNA@data %>% as.data.frame() %>% rownames_to_column("gene") %>% as_tibble() %>% gather(rowname,count,-gene)
+
+metadata_as_data_frame <- 
+  data_object_filtered@meta.data %>% 
+  rownames_to_column() %>% 
+  as_tibble() %>%
+  dplyr::mutate(sub_type = factor(sub_type,levels = c("mitotic","inner_intermed","outer_intermed","interaction","death-mt-rich"),ordered = T)) %>%
+  dplyr::mutate(type = factor(type,levels = c("CTRL","CDK2","CSN","DOUBLE"),ordered = T))
+
+metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene %in% c("CSN5","CSN8","CycE","Cdk2","CycB"))) %>% 
+  group_by(type,replicate,gene) %>%
+  summarise(percent_expr = sumfun(count) ) %>%
+  ggplot(aes(x = type,y = percent_expr,fill = type)) +
+    geom_bar(stat = "identity") + 
+    facet_wrap(~replicate + gene ,scales = "free",ncol = 5,nrow = 2) +
+  theme_b110()# +
+  #scale_fill_manual(values =x[c(2,1,3,4)]) 
+
+ggsave("CSNCDKCycE_expr_genes-PC1.pdf")
+
+  
+metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left"),sub_type=="mitotic") %>% 
+  inner_join(raw_counts %>% filter(gene == "dap")) %>% 
+  group_by(type,replicate) %>% #sister_clusters
+  summarise(percent_expr = sumfun(count) ) %>%
+  ggplot(aes(x = type,y = percent_expr,fill = type)) +
+    geom_bar(stat = "identity") + 
+    facet_wrap(~replicate, scales = "free") + # + sister_clusters
+  theme_b110() +
+  ggtitle('dap expression') +
+  scale_fill_manual(values = c(gred, ggreen, gblue, gyellow, b110_grey_light)) 
+
+metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene == "dup")) %>% 
+  ggplot(aes(x = type,y = count,fill = type)) +
+  geom_violin(trim = F) + 
+  stat_summary(fun.data = data_summary, position = position_dodge2(0.9)) +
+  ggsignif::geom_signif(
+    comparisons = list(c("CTRL","CSN"),
+                       c("CTRL","CDK2"),
+                       c("CDK2","DOUBLE"),
+                       c("CSN","DOUBLE")),
+    test = 'wilcox.test',
+    test.args = c("alternative" = "two.sided"),
+    step_increase = 0.2) +
+  facet_wrap(~replicate) +
+  theme_b110() +
+  ggtitle('dup expression') +
+  scale_fill_manual(values = c(gred, ggreen, gblue, gyellow, b110_grey_light))
+
+
+metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene == "E2f1")) %>% 
+  ggplot(aes(x = type,y = count,fill = type)) +
+  geom_violin(trim = F) + 
+  stat_summary(fun.data = data_summary, position = position_dodge2(0.9)) +
+  ggsignif::geom_signif(
+    comparisons = list(c("CTRL","CSN"),
+                       c("CTRL","CDK2"),
+                       c("CDK2","DOUBLE"),
+                       c("CSN","DOUBLE")),
+    test = 'wilcox.test',
+    test.args = c("alternative" = "two.sided"),
+    step_increase = 0.2) +
+  facet_wrap(~replicate) +
+  theme_b110() +
+  ggtitle('E2f1 expression') +
+  scale_fill_manual(values = c(gred, ggreen, gblue, gyellow, b110_grey_light))
+  
+p <- metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene %in% c("Drs","DptA","DptB","Dif"))) %>% 
+  group_by(type,replicate,gene) %>%
+  summarise(percent_expr = sumfun(count) ) %>%
+  ggplot(aes(x = type,y = percent_expr,fill = type)) +
+    geom_bar(stat = "identity") + 
+    facet_wrap(~replicate + gene  ,scales = "free",ncol = 4,nrow = 2) +
+  theme_b110()
+
+ggsave("percent_expression_Drs_DptAB_Mtk.pdf",p,height = 8,width = 24)
+
+p <- metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene %in% c("CycE","Cdk2","CycB","aurB"))) %>% 
+  filter(type=="DOUBLE") %>%
+  group_by(type,replicate,gene,sub_type) %>%
+  summarise(percent_expr = sumfun(count) ) %>%
+  ggplot(aes(x = sub_type,y = percent_expr,fill = type)) +
+    geom_bar(stat = "identity") + 
+    facet_wrap(~replicate + type + gene  ,scales = "free",ncol = 4,nrow = 2) +
+  theme_b110()
+```
+
+# dap, dup,CycE and CycB expression are altered during RNAi
+
+RNAi is penetrant across all cell-types. dap, dup and CycE expression are profoundly elevated over double knockdown (especially in the interaction fraction of cells). IN mitotic cells CycE and Cdk2 are rather downregulated over double RNAi. CSN and CycB are strongly down regulated across all cell types. Cdk2 expression increase on CSN dockdown is alleviated in double knockdown. Interaction cells retain residual Cdk2 mRNA. Cells start expression of AMPs and are thus further classified as interaction cells once crossing a threshold of AMPs being the tightening of the senescence phenotype. Culture starts this asynchronous because of the natural distribution of cells in the cell cycle. From the Expression scheme of CycB I do hypothesize that inner_intermed cells are cells in G2 phase also the once beeing depleted most of CycB and becoming less when CycB becomes less too. INteraction cells have lower levels of CycB and similar levels of dap and dup as mitotic cells also have lower levels of Cdk2. Have much higher levels of AMPs. Interaction cells have much less of aurB. Outer_intermed cells have much less cells expression any of the cyclins, especially little Cdk2. The additional knockdown of CDk2 i addtion to CSN seems to tip the balance towards immunogenic cell cycle arrest.
+
+```{r}
+p1 <- metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left"),sub_type!="death-mt-rich") %>% 
+  inner_join(raw_counts %>% filter(gene %in% c("CSN5","CSN8","CycE","Cdk2","dap","dup","CycB","aurB"))) %>% 
+  group_by(replicate,gene,sub_type,type) %>%
+  summarise(percent_expr = sumfun(count) ) %>%
+  #group_by(replicate,gene,sub_type) %>%
+  #mutate(percent_expr=percent_expr-percent_expr[type=="CTRL"]) %>%
+  ggplot(aes(x=type,y=sub_type,fill=percent_expr)) +
+    geom_tile() +
+    facet_wrap(~replicate+gene,nrow = 2,ncol = 8) +
+    scale_fill_gradient2() +
+    ggtitle("Relative change in percent cells expressing a gene")
+
+ggsave(filename = "Perc_expression_change_Cdk_network.pdf",p1,width = 16,height = 4)
+ggsave(filename = "Perc_expression_change_Cdk_network.png",p1,width = 16,height = 4)
+
+p1 <- metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left"),sub_type!="death-mt-rich") %>% 
+  inner_join(raw_counts %>% filter(gene %in% c("CSN5","CSN8","CycE","Cdk2","dap","dup","CycB"))) %>%
+  group_by(replicate,gene,sub_type,type) %>%
+  summarise(rel_expr = mean(count) ) %>%
+  group_by(replicate,gene,sub_type) %>%
+  mutate(rel_expr=log(rel_expr/rel_expr[type=="CTRL"])) %>%
+  ggplot(aes(x=type,y=sub_type,fill=rel_expr)) +
+  geom_tile() +
+  facet_wrap(~replicate+gene,nrow = 2,ncol = 7) +
+  scale_fill_gradient2() +
+    ggtitle("Relative change in expression of a gene")
+
+ggsave(filename = "Rel_expression_change_relative_to_contrl_Cdk_network.pdf",p1,width = 16,height = 4)
+ggsave(filename = "Rel_expression_change_relative_to_contrl_Cdk_network.png",p1,width = 16,height = 4)
+
+p1 <- metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left"),sub_type!="death-mt-rich") %>% 
+  inner_join(raw_counts %>% filter(gene %in% c("CSN5","CSN8","CycE","Cdk2","dap","dup","CycB"))) %>%
+  group_by(gene,sub_type,type) %>%
+  summarise(rel_expr = mean(count) ) %>%
+  group_by(gene,sub_type) %>%
+  mutate(rel_expr=log(rel_expr/rel_expr[type=="CTRL"])) %>%
+  ggplot(aes(x=type,y=sub_type,fill=rel_expr)) +
+  geom_tile() +
+  facet_wrap(~gene,nrow = 2,ncol = 7) +
+  scale_fill_gradient2() +
+    ggtitle("Relative change in expression of a gene summarized across replicates")
+
+ggsave(filename = "Rel_expression_change_relative_to_contrl_Cdk_network_joined_rep.pdf",p1,width = 16,height = 4)
+ggsave(filename = "Rel_expression_change_relative_to_contrl_Cdk_network_joined_rep.png",p1,width = 16,height = 4)
+
+
+```
+
+
+# we can also check differential expression across conditions for single genes using their counts directly
+
+Keep care that high 0 counts or differeing number of cells between different clusters in different conditions can influence this results. First we look at some genes that should be differentially expressed cause of RNAi and then we can use the same method to examine some candidate genes. Therin we always look for genes that are especially differential in double treatment conditions
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene == "CSN5")) %>% 
+  ggplot(aes(x = type,y = count,fill = type)) +
+  geom_violin(trim = F) + 
+  stat_summary(fun.data = data_summary, position = position_dodge2(0.9)) +
+  ggsignif::geom_signif(
+    comparisons = list(c("CTRL","CSN"),
+                       c("CTRL","CDK2"),
+                       c("CDK2","DOUBLE"),
+                       c("CSN","DOUBLE")),
+    test = 'wilcox.test',
+    test.args = c("alternative" = "two.sided"),
+    step_increase = 0.2) +
+  facet_wrap(~replicate) +
+  ggtitle('CSN5') +
+  theme_b110()
+
+ggsave("CSN5_viol_genes-PC1.png")
+
+metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene == "CSN8")) %>% 
+  ggplot(aes(x = type,y = count,fill = type)) +
+  geom_violin(trim = F) + 
+  stat_summary(fun.data = data_summary, position = position_dodge2(0.9)) +
+  ggsignif::geom_signif(
+    comparisons = list(c("CTRL","CSN"),
+                       c("CTRL","CDK2"),
+                       c("CDK2","DOUBLE"),
+                       c("CSN","DOUBLE")),
+    test = 'wilcox.test',
+    test.args = c("alternative" = "two.sided"),
+    step_increase = 0.2) +
+  facet_wrap(~replicate) +
+  ggtitle('CSN8 expression') +
+  theme_b110()
+
+ggsave("CSN8_viol_genes-PC1.png")
+
+metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene == "Cdk2")) %>% 
+  ggplot(aes(x = type,y = count,fill = type)) +
+  geom_violin(trim = F) + 
+  stat_summary(fun.data = data_summary, position = position_dodge2(0.9)) +
+  ggsignif::geom_signif(
+    comparisons = list(c("CTRL","CSN"),
+                       c("CTRL","CDK2"),
+                       c("CDK2","DOUBLE"),
+                       c("CSN","DOUBLE")),
+    test = 'wilcox.test',
+    test.args = c("alternative" = "two.sided"),
+    step_increase = 0.2) +
+  facet_wrap(~replicate) +
+  ggtitle('Cdk2 expression')
+  theme_b110()
+
+  ggsave("Cdk2_viol_genes-PC1.png")
+
+  
+metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene == "CycE")) %>% 
+  ggplot(aes(x = type,y = count,fill = type)) +
+  geom_violin(trim = F) + 
+  stat_summary(fun.data = data_summary, position = position_dodge2(0.9)) +
+  ggsignif::geom_signif(
+    comparisons = list(c("CTRL","CSN"),
+                       c("CTRL","CDK2"),
+                       c("CDK2","DOUBLE"),
+                       c("CSN","DOUBLE")),
+    test = 'wilcox.test',
+    test.args = c("alternative" = "two.sided"),
+    step_increase = 0.2) +
+  facet_wrap(~replicate) +
+  ggtitle('CycE expression') + 
+  theme_b110()
+
+ggsave("CycE_viol_genes-PC1.png")
+
+
+  
+metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene == "Drs")) %>% 
+  ggplot(aes(x = type,y = count,fill = type)) +
+  geom_violin(trim = F) + 
+  stat_summary(fun.data = data_summary, position = position_dodge2(0.9)) +
+  ggsignif::geom_signif(
+    comparisons = list(c("CTRL","CSN"),
+                       c("CTRL","CDK2"),
+                       c("CDK2","DOUBLE"),
+                       c("CSN","DOUBLE")),
+    test = 'wilcox.test',
+    test.args = c("alternative" = "two.sided"),
+    step_increase = 0.2) +
+  facet_wrap(~replicate) +
+  ggtitle('Drs expression') + 
+  theme_b110()
+
+ggsave("Drs_viol_genes-PC1.pdf")
+
+ggsave("Drs_viol_genes-PC1.png")
+
+
+  
+a <- metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene == "DptA")) %>% 
+  ggplot(aes(x = type,y = count,fill = type)) +
+  geom_violin(trim = F) + 
+  stat_summary(fun.data = data_summary, position = position_dodge2(0.9)) +
+  ggsignif::geom_signif(
+    comparisons = list(c("CTRL","CSN"),
+                       c("CTRL","CDK2"),
+                       c("CDK2","DOUBLE"),
+                       c("CSN","DOUBLE")),
+    test = 'wilcox.test',
+    test.args = c("alternative" = "two.sided"),
+    step_increase = 0.2) +
+  facet_wrap(~replicate) +
+  ggtitle('DptA expression') + 
+  theme_b110()
+
+
+b <- metadata_as_data_frame %>% 
+  filter(sister_clusters %in% c("right","left")) %>% 
+  inner_join(raw_counts %>% filter(gene == "DptB")) %>% 
+  ggplot(aes(x = type,y = count,fill = type)) +
+  geom_violin(trim = F) + 
+  stat_summary(fun.data = data_summary, position = position_dodge2(0.9)) +
+  ggsignif::geom_signif(
+    comparisons = list(c("CTRL","CSN"),
+                       c("CTRL","CDK2"),
+                       c("CDK2","DOUBLE"),
+                       c("CSN","DOUBLE")),
+    test = 'wilcox.test',
+    test.args = c("alternative" = "two.sided"),
+    step_increase = 0.2) +
+  facet_wrap(~replicate) +
+  ggtitle('DptB expression') + 
+  theme_b110()
+
+c <- a+b
+
+ggsave("Dptviol_genes-PC1.pdf",c,width = 16,height = 10)
+
+```
+
+# next We use Seurat to aggregate avg. pseudo-bulk sequences for each and every condition
+
+I found that the conventional averaging of Seurat data using the mean of all cells per treatment does not give any satisfactory results for differential expression analysis. This might be because the large amount of low counts in cells that are in a different state or population might obscure the calculation of the mean to much such that noise from scRNA eq outweighs actual expression changes. The cumulative sum of reads over all cells of a sample later shows more promising results as the read distribution is more comarable to what a "real" bulk RNAseq would reveal.
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+#extract the raw count matrix
+raw_counts <- data_object_filtered$RNA@counts %>% as.data.frame() %>% rownames_to_column("gene") %>% as_tibble() %>% gather(rowname,count,-gene)
+
+# extract and reformat the meta data 
+metadata_as_data_frame <-
+  data_object_filtered@meta.data %>%
+  rownames_to_column() %>%
+  as_tibble() %>%
+  dplyr::mutate(sub_type = factor(sub_type,levels = c("mitotic","inner_intermed","outer_intermed","interaction","death-mt-rich"),ordered = T)) %>%
+  dplyr::mutate(type = factor(type,levels = c("CTRL","CDK2","CSN","DOUBLE"),ordered = T)) %>% 
+  dplyr::mutate(type = if_else(sample %in% c("CSN5RLUC","CSN8RLUC"),"CSN",
+                  if_else(sample %in% c("CSN5CDK2","CSN8CDK2"),"DOUBLE",
+                    if_else(sample == "RLUCRLUC","CTRL","CDK2")))) 
+    
+#define a helper function that sums up the read counts per gene over all cells
+sum_counts <- function(x){
+  raw_counts %>% 
+    filter(rowname %in% x$rowname) %>%
+    group_by(gene) %>%
+    summarise(count = sum(count, na.rm = T)) %>%
+    return()
+}
+
+# perform the aggregation to cumulative sums per sample
+count_sum_data <- metadata_as_data_frame %>%  
+  group_by(type,replicate) %>%
+  dplyr::do(res = sum_counts(.)) %>%
+  unnest() %>% 
+  unite(sample,type,replicate, remove = T) %>%
+  spread(sample,count) %>%
+  column_to_rownames("gene")
+
+# reformat the meta_data table and thus the expermerimental design for DESeq2
+meta_data <- tibble("samples" = colnames(count_sum_data)) %>% 
+  separate(samples, c("type","replicate"), remove = F) %>% 
+  as.matrix()
+
+rownames(meta_data) <- meta_data[,"samples"]
+
+# create a DESeq2 object on the integer count data and the design matrix
+
+dds <- DESeqDataSetFromMatrix(countData = count_sum_data,
+                                colData = meta_data,
+                                design = ~ type )
+#pre filter for 0 read counts
+dds <- dds[ rowSums(counts(dds)) >= 1, ]
+
+# define the contrastable levels
+dds$type <- factor(dds$type, levels = c("CTRL","CSN","CDK2","DOUBLE"))
+
+# perform model estimation, normalization, variance stableization and shrinkage
+dds <- DESeq(dds)
+
+# extract variance stabilized data for PCA and plotting
+vsd <- vst(dds, blind = FALSE)
+
+plotPCA(vsd, intgroup = c("type","replicate"))
+
+```
+
+-> sample cluster well by perturbationand not by batch or replicate indeed the co-perturbation is vastly different from the two single perturbation, which in turn are very different from the control. Differences between replicates are higher then differences between replciates.
+
+# next we understand differentially expressed genes between the co-perturbation and the control treatment
+
+```{r}
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+# perform sample contrasting and p-value estimation. p-values are corrected by independent hypothesis weighting
+res <- results(dds, contrast = c("type", "DOUBLE", "CTRL"), filterFun = ihw)
+
+# next we plot a clustered heatmap of the most differentially expressed genes
+
+df <- as.data.frame(colData(dds)[,c("replicate","type")])
+pheatmap(assay(vsd)[which(res$padj < 0.1 & abs(res$log2FoldChange) > 2),], 
+         cluster_rows = T, 
+         show_rownames = T,
+         cluster_cols = T, 
+         annotation_col = df, scale = "row")
+
+# lets QC the analysis by checking the MA-plot if looking normal
+
+DESeq2::plotMA(res,ylim = c(-4,4))
+
+#-> all good
+
+# lets get a glimpse 
+
+summary(res)
+
+# -> quite a number of genes are indeed differentially expressed and there is a profound overlap with the differences per perturbation
+
+res %>% as.data.frame() %>% rownames_to_column() %>% as_tibble() 
+
+# lets reformat and plot the differentially expressed genes in a godd old volcano plot
+
+DE_genes <- res %>% 
+  as.data.frame() %>% 
+  rownames_to_column() %>% 
+  as_tibble() %>%
+  filter(baseMean > summary(baseMean)[2]) %>%
+  mutate(signi = if_else(padj < 0.1,
+                         if_else(log2FoldChange > 1,"positive",
+                                 if_else(log2FoldChange < (-1),"negative","none")),"none"))
+
+DE_genes  %>%
+  ggplot(aes(x = log2FoldChange, y = -log10(pvalue), label = rowname,col = signi)) +
+    geom_point() +
+    theme_b110() +
+    ggrepel::geom_label_repel(data = subset(DE_genes, abs(log2FoldChange) > 2 & padj < 0.05, col = "black")) +
+    ylab("-log10(pvalue)") +
+    xlab("log2 fold change") +
+    scale_color_manual(values = c(gblue,b110_grey_light,gred))
+
+ggsave("DE_pseudobulk_genes-PC1.png")
+
+```
+
+# lets visualize specific genes and their bulk expression change
+
+```{r}
+
+a <- plotCounts(dds, gene = "Dro", intgroup = "type",returnData = T) %>%
+          ggplot(aes(x = type,y = count)) +
+            geom_point() +
+            theme_b110() +
+            ggtitle("Dro") +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+b <- plotCounts(dds, gene = "edin", intgroup = "type",returnData = T) %>%
+          ggplot(aes(x = type,y = count)) +
+            geom_point() +
+            theme_b110() +
+            ggtitle("edin") +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+c <- plotCounts(dds, gene = "Sesn", intgroup = "type",returnData = T) %>%
+          ggplot(aes(x = type,y = count)) +
+            geom_point() +
+            theme_b110() +
+            ggtitle("Sesn") +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+a+b+c
+
+ggsave("differential_exp_-PC1.png")
+```
+
+# lets understand genes that are especially different from either CSN or CDK2 KD by applying a linear model that estimates the residuals of a linear combination of CDK2 and CSN KD
+
+```{r}
+temp <- count_sum_data %>% 
+  rownames_to_column() %>% 
+  tidyr::gather(samples,value,-rowname) %>% 
+  left_join(as_tibble(meta_data)) %>% 
+  dplyr::select(-samples) %>% 
+  group_by(type,replicate) %>%
+  mutate(value = value/median(value)) %>%
+  ungroup() %>%
+  mutate(value = log1p(value)) %>%
+  spread(type,value,fill = 0) %>% 
+  group_by(rowname,replicate)  %>% 
+  summarise_if(is.numeric,mean)
+
+mdl <- lm(DOUBLE~CDK2+CSN-CTRL,data = temp) 
+
+residuals(mdl)
+
+temp$interaction <- residuals(mdl)
+
+temp %>% 
+   ggplot(aes(x = DOUBLE,y = CSN,col = interaction,label = rowname)) + 
+   geom_point() + 
+   facet_wrap(~replicate) + 
+   theme_b110() + 
+   scale_color_gradient2()  + 
+   geom_abline(slope = 1, intercept = 0) + 
+   ggrepel::geom_label_repel(data = subset(temp,abs(interaction) > sort(abs(temp$interaction),decreasing=T)[20]))
+```
+
+# lets Annotate trajectories through the data using slingshot
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+#extract the raw count matrix
+raw_counts <- 
+  data_object_filtered$RNA@counts %>% as.data.frame() %>% 
+  rownames_to_column("gene") %>% as_tibble() %>% 
+  gather(rowname,count,-gene)
+
+Idents(data_object_filtered) <- "sub_type"
+  data_object_filtered <- RunUMAP(data_object_filtered, dims = 2:10)
+  data_object_filtered_sce <- as.SingleCellExperiment(data_object_filtered,slot="data")
+
+  FQnorm <- function(counts){
+    rk <- apply(counts,2,rank,ties.method='min')
+    counts.sort <- apply(counts,2,sort)
+    refdist <- apply(counts.sort,1,median)
+    norm <- apply(rk,2,function(r){ refdist[r] })
+    rownames(norm) <- rownames(counts)
+    return(norm)
+}
+assays(data_object_filtered_sce)$norm <- FQnorm(assays(data_object_filtered_sce)$counts)
+
+data_object_filtered_sce_sling <- slingshot(data_object_filtered_sce, clusterLabels = 'sub_type', reducedDim = 'UMAP')
+
+colors <- rainbow(50, alpha = 1)
+plot(reducedDims(data_object_filtered_sce_sling)$UMAP, col = colors[cut(data_object_filtered_sce_sling$slingPseudotime_1,breaks=50)], pch=16, asp = 1)
+lines(SlingshotDataSet(data_object_filtered_sce_sling), lwd=2)
+
+lines(SlingshotDataSet(data_object_filtered_sce_sling), lwd=2, type = 'lineages', col = 'black')
+
+# Plot Slingshot pseudotime vs cell stage. 
+ggplot(as.data.frame(colData(data_object_filtered_sce_sling)), aes(x = slingPseudotime_1, y = sub_type, 
+                              colour = sub_type)) +
+    geom_quasirandom(groupOnX = FALSE) +
+    scale_color_tableau() + theme_classic() +
+    xlab("Slingshot pseudotime") + ylab("Timepoint") +
+    ggtitle("Cells ordered by Slingshot pseudotime")
+
+ggsave("./pseudotime_slingshot-PC1.png")
+
+
+
+```
+
+
+# lets find temporally restricted genes
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+library(gam)
+
+# Only look at the 1,000 most variable genes when identifying temporally expressesd genes.
+# Identify the variable genes by ranking all genes by their variance.
+Y <- log2(counts(data_object_filtered_sce_sling) + 1)
+var1K <- names(sort(apply(Y, 1, var),decreasing = TRUE))[1:1000]
+Y <- Y[var1K, ]  # only counts for variable genes
+
+# Fit GAM for each gene using pseudotime as independent variable.
+t <- data_object_filtered_sce_sling$slingPseudotime_1
+gam.pval <- apply(Y, 1, function(z){
+  d <- data.frame(z=z, t=t)
+  tmp <- gam(z ~ lo(t), data=d)
+  p <- summary(tmp)[4][[1]][1,5]
+  p
+})
+
+# Identify genes with the most significant time-dependent model fit.
+topgenes <- names(sort(gam.pval, decreasing = FALSE))[1:100]  
+
+# Prepare and plot a heatmap of the top genes that vary their expression over pseudotime.
+require(clusterExperiment)
+
+heatdata <- assays(data_object_filtered_sce_sling)$counts[topgenes, order(t, na.last = NA)]
+heatclus <- data_object_filtered_sce_sling$type[order(t, na.last = NA)]
+
+heatmap(log1p(heatdata) %>% as.matrix(), Colv = NA)
+
+
+ggsave("./pseudotime_heatmap-PC1.png")
+
+
+```
+
+# velocyto based analysis of RNA expression velocity 
+
+Erica Valentini helps in running the pipelines.
+
+we use velocyto.R 
+
+we want to understand which Route cells take after cell cycle arrest and what drives them into senescence or stress response
+
+combined loom files as ouput of velocyto using
+
+import loompy
+loompy.combine(files, key="Accession")
+
+we use the follwoing pipeline to do so:
+
+http://pklab.med.harvard.edu/velocyto/notebooks/R/DG1.nb.html
+
+I want to combine the velocyto analysis with my current seurat pipeline so I use the appraoch presented here:
+
+http://htmlpreview.github.io/?https://github.com/satijalab/seurat-wrappers/blob/master/docs/velocity.html
+
+# laod and combine scRNA Seurat data with scRNA-velocyto data
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_vel <- ReadVelocity(file = "TX16_combined.loom") %>% as.Seurat(x = .)
+
+filtered_names <- tibble("new_name"=CellsByIdentities(data_object_filtered)) %>% unnest(new_name) %>% mutate(in_filtered=1)
+name_mappping <- tibble("velo_names"=CellsByIdentities(data_vel)) %>% unnest(velo_names)
+
+name_mappping <- name_mappping %>% 
+  mutate(new_name = if_else(
+                          grepl("TX16_1_3runs",velo_names), 
+                            gsub("TX16_1_3runs:","CSN5RLUC_1_",x = velo_names),if_else(
+                          grepl("TX16_2_3runs",velo_names), 
+                            gsub("TX16_2_3runs:","CDK2RLUC_1_",x = velo_names),if_else(
+                          grepl("TX16_3_3runs",velo_names), 
+                            gsub("TX16_3_3runs:","RLUCRLUC_1_",x = velo_names),if_else(
+                          grepl("TX16_4_3runs",velo_names), 
+                            gsub("TX16_4_3runs:","CSN5CDK2_1_",x = velo_names),if_else(
+                          grepl("TX16_5_3runs",velo_names), 
+                            gsub("TX16_5_3runs:","CSN8RLUC_2_",x = velo_names),if_else(
+                          grepl("TX16_6_3runs",velo_names), 
+                            gsub("TX16_6_3runs:","CDK2RLUC_2_",x = velo_names),if_else(
+                          grepl("TX16_7_3runs",velo_names), 
+                            gsub("TX16_7_3runs:","RLUCRLUC_2_",x = velo_names),if_else(
+                          grepl("TX16_8_3runs",velo_names), 
+                            gsub("TX16_8_3runs:","CSN8CDK2_2_",x = velo_names),velo_names)))))))),
+         new_name = gsub("(.+?)x","\\1",x = new_name)
+         )
+
+name_mappping <- name_mappping %>% left_join(filtered_names)
+
+filtered_vel_cells <- name_mappping %>% filter(in_filtered == 1) %>% pull(velo_names)
+
+filtere_vel_new_names <- name_mappping %>% filter(in_filtered == 1) %>% pull(new_name)
+
+data_vel <- subset(data_vel,cells= filtered_vel_cells,features=rownames(data_object_filtered@assays$RNA@data))
+
+data_vel <- RenameCells(data_vel,new.names = filtere_vel_new_names)
+
+data_object_filtered[["spliced"]] <- data_vel@assays$spliced
+data_object_filtered[["unspliced"]] <- data_vel@assays$unspliced
+data_object_filtered[["ambiguous"]] <- data_vel@assays$ambiguous
+
+```
+
+# lets do the velocyto analysis
+
+```{r}
+
+data_object_filtered <- RunVelocity(object = data_object_filtered, deltaT = 1, kCells = 25, fit.quantile = 0.02)
+
+ident.colors <- (scales::hue_pal())(n = length(x = levels(x = data_object_filtered)))
+
+names(x = ident.colors) <- levels(x = data_object_filtered)
+
+cell.colors <- ident.colors[Idents(object = data_object_filtered)]
+
+names(x = cell.colors) <- colnames(x = data_object_filtered)
+
+velo_plot <- show.velocity.on.embedding.cor(
+  emb = Embeddings(object = data_object_filtered, reduction = "umap"), 
+  vel = Tool(object = data_object_filtered, slot = "RunVelocity"), 
+  n = 200, 
+  scale = "sqrt", 
+  cell.colors = ac(x = cell.colors, alpha = 0.5), 
+  cex = 0.8, 
+  arrow.scale = 3, 
+  show.grid.flow = TRUE, 
+  min.grid.cell.mass = 0.5, 
+  grid.n = 40, 
+  arrow.lwd = 1, 
+  do.par = FALSE,
+  return.details = TRUE, 
+  cell.border.alpha = 0.1)
+
+
+ggsave("./velo-PC1.png")
+
+saveRDS(data_object_filtered, file = "./data_object_filtered_together-PC1.rds")
+save(velo_plot, file = "./velo_plot-PC1.rds")
+
+
+```
+
+
