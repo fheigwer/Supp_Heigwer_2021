@@ -81,23 +81,48 @@ screen_array <- screens %>% pull(screen)
 plate_array <- plate_well %>% pull(plate)
 well_array <-  plate_well %>% pull(well) %>% unique() %>% c(.,"P07")
 
-example_sc_data <- tbl(test_db,"D1086_single_cell_V1") %>%
-  filter(screen %in% screen_array,
-         plate %in% plate_array,
-         well %in% well_array
-         ) %>%
-  collect(n=Inf)
+relevant_combinations <- 
+  tibble(screenx = c("S095","S095","S097","S097","S170","S170","S172","S172","S201","S201","S203","S203","S120","S120","S122","S122","S169","S169","S171","S171","S188","S188","S186","S186","S188","S188","S186","S186","S188","S188","S186","S186"),
+         platex =  c("1013","2013","1013","2013","1018","2018","1018","2018","1011","2011","1011","2011","1016","2016","1016","2016","1013","2013","1013","2013","1011","2011","1011","2011","1019","2019","1019","2019","1019","2019","1019","2019"),
+         wellx=    c("J17","J17","J17","J17","D18","D18","D18","D18","G22","G22","G22","G22","P16","P16","P16","P16","D22","D22","D22","D22","I14","I14","I14","I14","J22","J22","J22","J22","H17","H17","H17","H17") )
+
+ll <- as.list(1:nrow(relevant_combinations))
+
+example_sc_data<-lapply(ll, function(x){
+  print(x)
+  screenx <- relevant_combinations %>% pull(screenx) %>% .[x]
+  platex <- relevant_combinations %>% pull(platex) %>% .[x]
+  wellx <- relevant_combinations %>% pull(wellx) %>% .[x]
+    
+  example_sc_data <- tbl(test_db,"D1086_single_cell_V1") %>%
+    filter(screen == screenx,
+           plate == platex,
+           well == wellx
+           ) %>%
+    collect(n=Inf)
+  
+  return(example_sc_data)
+}) %>% bind_rows()
 
 saveRDS(example_sc_data,"objects/relevant_sc_feature_data.rds")
 write_delim(example_sc_data,"objects/relevant_sc_feature_data.txt",delim = "\t")
 
 
-example_sc_class <- tbl(test_db,"D1086_syngene_classified_cells_sc")  %>%
-  filter(screen %in% screen_array,
-         plate %in% plate_array,
-         well %in% well_array
-  ) %>%
-  collect(n=Inf)
+example_sc_class<-lapply(ll, function(x){
+  print(x)
+  screenx <- relevant_combinations %>% pull(screenx) %>% .[x]
+  platex <- relevant_combinations %>% pull(platex) %>% .[x]
+  wellx <- relevant_combinations %>% pull(wellx) %>% .[x]
+    
+  example_sc_classx <- tbl(test_db,"D1086_syngene_classified_cells_sc") %>%
+    filter(screen == screenx,
+           plate == platex,
+           well == wellx
+           ) %>%
+    collect(n=Inf)
+  
+  return(example_sc_classx)
+}) %>% bind_rows()
 
 saveRDS(example_sc_class,"objects/relevant_sc_class.rds")
 write_delim(example_sc_class,"objects/relevant_sc_class.txt",delim = "\t")
