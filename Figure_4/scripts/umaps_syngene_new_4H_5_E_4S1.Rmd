@@ -104,8 +104,8 @@ example_sc_data<-lapply(ll, function(x){
   return(example_sc_data)
 }) %>% bind_rows()
 
-saveRDS(example_sc_data,"objects/relevant_sc_feature_data.rds")
-write_delim(example_sc_data,"objects/relevant_sc_feature_data.txt",delim = "\t")
+saveRDS(example_sc_data,"relevant_sc_feature_data.rds")
+write_delim(example_sc_data,"relevant_sc_feature_data.txt",delim = "\t")
 
 
 example_sc_class<-lapply(ll, function(x){
@@ -124,8 +124,59 @@ example_sc_class<-lapply(ll, function(x){
   return(example_sc_classx)
 }) %>% bind_rows()
 
-saveRDS(example_sc_class,"objects/relevant_sc_class.rds")
-write_delim(example_sc_class,"objects/relevant_sc_class.txt",delim = "\t")
+saveRDS(example_sc_class,"relevant_sc_class.rds")
+write_delim(example_sc_class,"relevant_sc_class.txt",delim = "\t")
+
+relevant_combinations <- 
+  tibble(screenx = c("S100","S100","S122","S122","S152","S152"),
+         platex =  c("CTRL1","CTRL1","CTRL1","CTRL1","CTRL1","CTRL1"),
+         wellx=    c("D23","E12","D23","E12","D23","E12") )
+
+
+ll <- as.list(1:nrow(relevant_combinations))
+
+rluc_data<-lapply(ll, function(x){
+  print(x)
+  screenx <- relevant_combinations %>% pull(screenx) %>% .[x]
+  platex <- relevant_combinations %>% pull(platex) %>% .[x]
+  wellx <- relevant_combinations %>% pull(wellx) %>% .[x]
+    
+  example_sc_data <- tbl(test_db,"D1086_single_cell_V1") %>%
+    filter(screen == screenx,
+           plate == platex,
+           well == wellx
+           ) %>%
+    collect(n=Inf)
+  
+  return(example_sc_data)
+}) %>% bind_rows()
+
+relevant_combinations <- 
+  tibble(screenx = c("S100","S100","S122","S122","S152","S152"),
+         platex =  c("CTR1","CTR1","CTR1","CTR1","CTR1","CTR1"),
+         wellx=    c("D23","E12","D23","E12","D23","E12") )
+
+rluc_class<-lapply(ll, function(x){
+  print(x)
+  screenx <- relevant_combinations %>% pull(screenx) %>% .[x]
+  platex <- relevant_combinations %>% pull(platex) %>% .[x]
+  wellx <- relevant_combinations %>% pull(wellx) %>% .[x]
+    
+  example_sc_classx <- tbl(test_db,"D1086_syngene_classified_cells_sc") %>%
+    filter(screen == screenx,
+           plate == platex,
+           well == wellx
+           ) %>%
+    collect(n=Inf)
+  
+  return(example_sc_classx)
+}) %>% bind_rows()
+
+rluc_data %<>% 
+  distinct() %>%
+  inner_join(rluc_class %>% mutate(field=as.numeric(field)) %>% mutate(plate="CTRL1") )
+
+saveRDS(rluc_data,file = "objects/rluc_single_cells.rds")
 
 ```
 
@@ -187,7 +238,8 @@ sample_data <- readRDS("objects/relevant_sc_feature_data.rds") %>%
 rluc_data <- readRDS("objects/rluc_single_cells.rds") %>% 
               separate(label, into = c("context", "group"), sep = "_", extra = "merge") %>% 
               mutate(query_name = rep("RLUC"),
-                     target_name = rep("RLUC"))
+                     target_name = rep("RLUC")) %>%
+              select(screen,plate,well,field,context,group,target_name,query_name,one_of(imp_features))
 
 
 
@@ -249,19 +301,19 @@ sample_data<-sample_data %>%
 ```
 
 ```{r}
-#umap_layout_rluc <- sample_data %>% 
-#                    group_by(well) %>%
-#                    sample_n(5000) %>%
-#                    ungroup() %>%
-#                    select(-field) %>%
-                    #filter(context == "Isolated") %>% 
-#                     select_if(is.numeric) %>% 
-#                      uwot::umap(#n_neighbors = 30,
-#                                 ret_model = T,fast_sgd = TRUE)
+umap_layout_rluc <- rluc_data %>% 
+                    group_by(well) %>%
+                    sample_n(5000) %>%
+                    ungroup() %>%
+                    select(-field) %>%
+                  #filter(context == "Isolated") %>% 
+                     select_if(is.numeric) %>% 
+                      uwot::umap(#n_neighbors = 30,
+                                 ret_model = T,fast_sgd = TRUE)
 
-#save(umap_layout_rluc, file = "objects/umap_layout_rluc.RData")
+save(umap_layout_rluc, file = "objects/umap_layout_rluc.RData")
 
- load("objects/umap_layout_rluc.RData")
+# load("objects/umap_layout_rluc.RData")
 ```
 
 ##RLUC isolated
@@ -272,7 +324,7 @@ Here I will make a UMAP of 10000 random RLUC isolated cells.
 
 rluc_iso_sample <- sample_n(rluc_data, 4000, replace = F)
 
-umap_rluc_iso <- rluc_iso_sample %>% select_if(is.numeric) %>% 
+umap_rluc_iso <- rluc_iso_sample %>% select(-field) %>% select_if(is.numeric) %>% 
                   umap_transform(model = umap_layout_rluc) %>% 
                   as.data.frame() %>% dplyr::rename(dimension1 = V1, dimension2 = V2) %>% 
                   mutate(group = rluc_iso_sample %>% pull(group))
@@ -295,13 +347,6 @@ umap_rluc_plot <-  print(ggplot(umap_rluc_iso, aes(x=-dimension1, y= -dimension2
                             ylab("UMAP dimension 2"))+
                               ylim(c(-4,4))+
                               xlim(c(-6,6)) 
-
-ggsave(umap_rluc_plot, height = 7, width = 7.5, 
-       filename = "graphics/umap_all_rluc_0.3.pdf")
-
-ggsave(umap_rluc_plot, height = 7, width = 7.5, 
-       filename = "graphics/umap_all_rluc_0.3.png")
-
 
 rluc_grp_prop <- rluc_iso_sample %>% group_by(group) %>% tally() %>% 
                   mutate(prop = n/sum(n), context = rep("Isolated"),
