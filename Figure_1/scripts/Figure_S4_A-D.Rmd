@@ -187,6 +187,8 @@ Fischer et al., eLife, 2015;4:e05464 doi: 10.7554/eLife.05464
   
 ```
 
+# Supplemental Figure S4 A-D
+
 Next we are going to visualize if there is a relationship of the remaining residuals of the median polish and the median effects of each target and query.
 
 ```{r Example_plot, message=FALSE, warning=FALSE, include=FALSE}
@@ -264,7 +266,7 @@ d <- interaction_stats %>%
 
 print(a+b+c+d)
 
-ggsave("plots/F1_SX_interaction_lethal_bias.pdf",width = 15,height = 15,units = "cm")
+ggsave("plots/S4_interaction_lethal_bias.pdf",width = 15,height = 15,units = "cm")
 ```
 
   

@@ -63,9 +63,9 @@ filtered_data_mean<-filtered_data %>% group_by(targetid,query_name) %>% summaris
 joined_sub<-filtered_data_mean %>% left_join(interac_sub)
 ```
 
-## Figure Supplement Outlier removal explanation
+## Supplement Figure S1 Outlier removal explanation
 
-  #plot raw data for the raptor screens
+  # S1 A-C plot raw data for the raptor screens
 
 ```{r}
 raptor_data<-feature_wise %>% filter(screen %in% c("S060","S062"),kind=="sample") %>% dplyr::select(-value) %>% spread(screen,rawvalue) %>% dplyr::select(S060,S062)
@@ -133,11 +133,11 @@ p3 <- raptor_data %>%
 
 p4 <- p1 + p2 + p3
 
-ggsave("plots/F1_S1_data_norm_outlier_remove.png",width = 24,height = 10,units = "cm")
-ggsave("plots/F1_S1_data_norm_outlier_remove.pdf",width = 24,height = 10,units = "cm")
+ggsave("plots/S1_data_norm_outlier_remove.png",width = 24,height = 10,units = "cm")
+ggsave("plots/S1_data_norm_outlier_remove.pdf",width = 24,height = 10,units = "cm")
 ```
 
-## Plot the reproducibility of interactions amongst replicates
+## S1 D-G Plot the reproducibility of interactions amongst replicates
 
 ```{r}
 
@@ -208,8 +208,8 @@ d <- interaction_stats %>%
 
 e <-a+b+c+d
 
-ggsave("plots/F1_S1_data_norm_interaction_corr.png",e,width = 24,height = 24,units = "cm")
-ggsave("plots/F1_S1_data_norm_interaction_corr.pdf",e,width = 24,height = 24,units = "cm")
+ggsave("plots/S1_data_norm_interaction_corr.png",e,width = 24,height = 24,units = "cm")
+ggsave("plots/S1_data_norm_interaction_corr.pdf",e,width = 24,height = 24,units = "cm")
 ```
 
 

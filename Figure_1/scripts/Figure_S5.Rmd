@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 ```
 
-## Figure 1 S2
+## Figure S5
 
 Correlation distributions along the reproducible features across all screening replicates
 

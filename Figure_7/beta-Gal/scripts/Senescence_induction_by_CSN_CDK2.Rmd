@@ -56,7 +56,13 @@ p1 <- this_data %>%
   filter(treatment!="Etop") %>%
   ggplot(aes(x=treatment,y=value)) +
     geom_boxplot() +
-    ggsignif::geom_signif(test = "t.test",test.args = "two.sided",comparisons = list(c("DOUBLE","CTRL"),c("DOUBLE","CDK2"),c("DOUBLE","CSN"),c("CSN","CTRL"),c("CDK2","CTRL")),step_increase = 0.2,map_signif_level=c("***"=0.001, "**"=0.01, "*"=0.05, "." = 0.15)) +
+    ggsignif::geom_signif(
+      test = "t.test",
+      test.args = "two.sided",
+      comparisons = list(c("DOUBLE","CTRL"),c("DOUBLE","CDK2"),c("DOUBLE","CSN"),c("CSN","CTRL"),c("CDK2","CTRL")),
+      step_increase = 0.2#,
+      #map_signif_level=c("***"=0.001, "**"=0.01, "*"=0.05, "." = 0.15)
+      ) +
     geom_point() +
     theme_cowplot() +
   ggtitle("staining positive pixel ratio")
@@ -80,7 +86,12 @@ p2 <- this_data %>%
     filter(treatment!="Etop") %>%
   ggplot(aes(x=treatment,y=value)) +
     geom_boxplot() +
-    ggsignif::geom_signif(test = "t.test",test.args = "two.sided",comparisons = list(c("DOUBLE","CTRL"),c("DOUBLE","CDK2"),c("DOUBLE","CSN"),c("CSN","CTRL"),c("CDK2","CTRL")),step_increase = 0.2,map_signif_level=c("***"=0.001, "**"=0.01, "*"=0.05, "." = 0.15)) +
+    ggsignif::geom_signif(test = "t.test",
+                          test.args = "two.sided",
+                          comparisons = list(c("DOUBLE","CTRL"),c("DOUBLE","CDK2"),c("DOUBLE","CSN"),c("CSN","CTRL"),c("CDK2","CTRL")),
+                          step_increase = 0.2,
+                          map_signif_level=c("***"=0.001, "**"=0.01, "*"=0.05, "." = 0.15)
+                          ) +
       geom_point() +
   theme_cowplot() +
   ggtitle("cell count")

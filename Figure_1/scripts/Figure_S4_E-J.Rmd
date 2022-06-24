@@ -36,7 +36,9 @@ google_blue='#4285F4'
 
 ```
 
-# PCA correction reminiscence of normalized morphology and interaction scores
+# Supplemental Figure S4 E-J 
+
+PCA correction reminiscence of normalized morphology and interaction scores
 
 We want to remove the "non-productive RISC binding effect" simultaneously from all features in the gene's interaction scores
 
@@ -372,7 +374,7 @@ plot_full <-
 
 print(plot_full)
 
-ggsave(plot = plot_full,filename = "plots/F1_SX_PCA_whitening.pdf",width = 15,height = 12,units = "cm")
+ggsave(plot = plot_full,filename = "plots/S4_PCA_whitening.pdf",width = 15,height = 12,units = "cm")
 
 ```
 

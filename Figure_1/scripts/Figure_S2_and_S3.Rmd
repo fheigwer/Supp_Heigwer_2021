@@ -55,156 +55,7 @@ filtered_data_mean<-filtered_data %>% group_by(targetid,query_name) %>% summaris
 joined_sub<-filtered_data_mean %>% left_join(interac_sub)
 ```
 
-## Figure Supplement Outlier removal explanation
-
-  #plot raw data for the raptor screens
-
-```{r}
-raptor_data<-feature_wise %>% filter(screen %in% c("S060","S062"),kind=="sample") %>% dplyr::select(-value) %>% spread(screen,rawvalue) %>% dplyr::select(S060,S062)
-
-p1 <- raptor_data %>%
-  ggplot(aes(x=S060,y=S062)) + 
-  geom_abline(slope = 1,lty=2) +
-  geom_vline(xintercept = 0,lty=2) +
-  geom_hline(yintercept = 0,lty=2) +
-  geom_point(pch=19,col=b110_transparent_black) + 
-  geom_smooth(col=b110_grey,method="lm") +
-  ylab(paste0(feature," replicate 2")) +
-  xlab(paste0(feature," replicate 1")) +
-  ggtitle(paste0("raptor ","outlier plot")) +
-  scale_color_manual(values = c("normal"=b110_grey_light,"outlier"=sgi_blue))+
-  theme_b110()+
-  stat_cor()
-```
-
-  #plot normalized (score, plate bias, screen bias) data for the raptor screens
-  
-```{r}
-  raptor_data<-feature_wise %>% filter(screen %in% c("S060","S062"),kind=="sample") %>% dplyr::select(-rawvalue) %>% spread(screen,value) %>% dplyr::select(S060,S062)
-
-  mdl<-MASS::rlm(S060~S062,raptor_data) #fit robust linear model for finding regression weights as outlier detection method
-  raptor_data$cd<-mdl$w # set the outlier weight as the distance in the normed data data frame, the weight is inverse correlated to the outlierness of a point
-```
-
-  #plot normalized data colored by outlierness score
-  
-```{r}
-
-p2 <- raptor_data %>%
-    ggplot(aes(x=S060,y=S062,col=cd)) + 
-    geom_abline(slope = 1,lty=2) +
-    geom_vline(xintercept = 0,lty=2) +
-    geom_hline(yintercept = 0,lty=2) +
-    geom_point(pch=19) + 
-    geom_smooth(col=b110_grey,method="lm") +
-    ylab(paste0(feature," replicate 2")) +
-    xlab(paste0(feature," replicate 1")) +
-    ggtitle(paste0("raptor ","outlier plot")) +
-    theme_b110()+
-    stat_cor()
-```
-
-  #plot normalized data colored points as outliers if their weight is less than 20 % of the mean outlier weight
-  
-```{r}
-  
-p3 <- raptor_data %>%
-    mutate(outlier=if_else(cd<1/5*mean(cd,na.rm = T),"outlier","normal")) %>% 
-    ggplot(aes(x=S060,y=S062)) + 
-    geom_abline(slope = 1,lty=2) +
-    geom_vline(xintercept = 0,lty=2) +
-    geom_hline(yintercept = 0,lty=2) +
-    geom_point(aes(col=outlier)) + 
-    geom_smooth(col="black",method="rlm") +
-    ylab(paste0(feature," replicate 2")) +
-    xlab(paste0(feature," replicate 1")) +
-    ggtitle(paste0("raptor ","outlier plot")) +
-    theme_b110()+
-    scale_color_manual(values = c("normal"=b110_grey_light,"outlier"=sgi_blue))
-  
-
-p4 <- p1 + p2 + p3
-
-ggsave("plots/F1_S1_data_norm_outlier_remove.png",width = 24,height = 10,units = "cm")
-ggsave("plots/F1_S1_data_norm_outlier_remove.pdf",width = 24,height = 10,units = "cm")
-```
-
-## Plot the reproducibility of interactions amongst replicates
-
-```{r}
-
-#for raptor
-
-a <- interaction_stats %>% 
-  filter(query_name=="raptor") %>% 
-    ggplot(aes(x=(`1`+`4`)/2,y=(`2`+`3`)/2)) +
-     geom_abline(slope = 1,lty=2) +
-     geom_vline(xintercept = 0,lty=2) +
-     geom_hline(yintercept = 0,lty=2) +
-     geom_point(col=b110_grey) + 
-     geom_smooth(col="black",method="rlm") +
-     stat_cor() +
-     ylab(paste0(feature," replicate 2 [π]")) +
-     xlab(paste0(feature," replicate 1 [π]")) +
-     ggtitle(paste0("raptor ","interaction reproducibility")) +
-     theme_b110()
-
-#for Tor
-
-b <- interaction_stats %>% 
-  filter(query_name=="Tor") %>% 
-    ggplot(aes(x=(`1`+`4`)/2,y=(`2`+`3`)/2)) +
-     geom_abline(slope = 1,lty=2) +
-     geom_vline(xintercept = 0,lty=2) +
-     geom_hline(yintercept = 0,lty=2) +
-     geom_point(col=b110_grey) + 
-     geom_smooth(col="black",method="rlm") +
-     stat_cor() +
-     ylab(paste0(feature," replicate 2 [π]")) +
-     xlab(paste0(feature," replicate 1 [π]")) +
-     ggtitle(paste0("Tor ","interaction reproducibility")) +
-     theme_b110()
-
-#for E(Pc)
-
-c <- interaction_stats %>% 
-  filter(query_name=="E(Pc)") %>% 
-    ggplot(aes(x=(`1`+`4`)/2,y=(`2`+`3`)/2)) +
-     geom_abline(slope = 1,lty=2) +
-     geom_vline(xintercept = 0,lty=2) +
-     geom_hline(yintercept = 0,lty=2) +
-     geom_point(col=b110_grey) + 
-     geom_smooth(col="black",method="rlm") +
-     stat_cor() +
-     ylab(paste0(feature," replicate 2 [π]")) +
-     xlab(paste0(feature," replicate 1 [π]")) +
-     ggtitle(paste0("E(Pc) ","interaction reproducibility")) +
-     theme_b110()
-
-#for brm
-
-d <- interaction_stats %>% 
-  filter(query_name=="brm") %>% 
-    ggplot(aes(x=(`1`+`4`)/2,y=(`2`+`3`)/2)) +
-     geom_abline(slope = 1,lty=2) +
-     geom_vline(xintercept = 0,lty=2) +
-     geom_hline(yintercept = 0,lty=2) +
-     geom_point(col=b110_grey) + 
-     geom_smooth(col="black",method="rlm") +
-     stat_cor() +
-     ylab(paste0(feature," replicate 2 [π]")) +
-     xlab(paste0(feature," replicate 1 [π]")) +
-     ggtitle(paste0("brm ","interaction reproducibility")) +
-     theme_b110()
-
-
-e <-a+b+c+d
-
-ggsave("plots/F1_S1_data_norm_interaction_corr.png",e,width = 24,height = 24,units = "cm")
-ggsave("plots/F1_S1_data_norm_interaction_corr.pdf",e,width = 24,height = 24,units = "cm")
-```
-
-# Figure 1S3 example interactions
+# Figure S2 example interactions
 
 ```{r}
 interaction_vecs <- readRDS("processed_data/interactions_stats_all_feats_df_18112019.rds")
@@ -263,9 +114,9 @@ cand<-plot_example_interaction(tgene = "sqd",qgene = "Tor")
 resc3<-plot_example_interaction(tgene = "Diap1",qgene = "Dronc")
 
 
-ggsave("plots/F1_S3_viab_example_interactions_Tor_Diap_viab.pdf",sl+resc+cand +resc2+sl2+resc3+plot_layout(ncol = 2),width = 10,height = 24,units = 'cm')
+ggsave("plots/S_viab_example_interactions_Tor_Diap_viab.pdf",sl+resc+cand +resc2+sl2+resc3+plot_layout(ncol = 2),width = 10,height = 24,units = 'cm')
 
-ggsave("plots/F1_S3_viab_example_interactions_Tor_Diap_viab.png",sl+resc+cand +resc2+sl2+resc3+plot_layout(ncol = 2),width = 10,height = 24,units = 'cm')
+ggsave("plots/S2_viab_example_interactions_Tor_Diap_viab.png",sl+resc+cand +resc2+sl2+resc3+plot_layout(ncol = 2),width = 10,height = 24,units = 'cm')
 
 
 interaction_stats <-interaction_vecs %>% filter(feature=="actin.m.eccentricity.tmean")
@@ -284,12 +135,12 @@ cand<-plot_example_interaction(tgene = "alphaCOP",qgene = "mor")
 resc3<-plot_example_interaction(tgene = "Pvf2",qgene = "Stat92E")
 
 
-ggsave("plots/F1_S3_eccentr_example_interactions_stuff.pdf",sl+resc+cand +resc2+sl2+resc3+plot_layout(ncol = 2),width = 10,height = 24,units = 'cm')
+ggsave("plots/S2_eccentr_example_interactions_stuff.pdf",sl+resc+cand +resc2+sl2+resc3+plot_layout(ncol = 2),width = 10,height = 24,units = 'cm')
 
-ggsave("plots/F1_S3_eccentr_example_interactions_stuff.png",sl+resc+cand +resc2+sl2+resc3+plot_layout(ncol = 2),width = 10,height = 24,units = 'cm')
+ggsave("plots/S2_eccentr_example_interactions_stuff.png",sl+resc+cand +resc2+sl2+resc3+plot_layout(ncol = 2),width = 10,height = 24,units = 'cm')
 ```
 
-## Figure 1S4
+## Supplemental Figure S3
 
 ```{r}
 
@@ -331,7 +182,7 @@ p<-count_per_qf %>%
   theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text=element_text(size = 6)) 
 
 
-ggsave("plots/figure_1S4_interaction_count_per_feature_and_query_heat.pdf",p,width = 4,height = 10)
-ggsave("plots/figure_1S4_interaction_count_per_feature_and_query_heat.png",p,width = 4,height = 10)
+ggsave("plots/S3_interaction_count_per_feature_and_query_heat.pdf",p,width = 4,height = 10)
+ggsave("plots/S3_interaction_count_per_feature_and_query_heat.png",p,width = 4,height = 10)
 ```
 
