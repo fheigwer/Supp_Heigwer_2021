@@ -9,6 +9,8 @@ editor_options:
   chunk_output_type: console
 ---
 
+
+
 ## Objective: 
 
 Create hierarchically clustered heatmaps of genetic interaction profile correlation and morphology feature correlation datasets. In this markdown, genetic interaction profile correlation and morphology feature correlation datasets will be filtered to keep only genes of interest (genes with complex annotation and nearest neighbors), do hierarchical clustering (a) based on morphology feature correlation values and b) based on genetic interaction profile correlation values) and create (interactive) heatmaps of clustered matrices.
@@ -513,7 +515,9 @@ heatmaply(common_matrix_clustered_cellcount_matrix,
           
 ```
 
-## 12. Density histograms before and after normalization of correlation values
+## Supplemental Figure S6 
+
+#12. Density histograms before and after normalization of correlation values
 
 ```{r}
 
