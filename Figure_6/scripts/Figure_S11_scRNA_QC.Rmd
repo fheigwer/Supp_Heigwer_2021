@@ -1,0 +1,409 @@
+---
+title: "scRNA-CDK-CSN"
+author: "F. Heigwer"
+date: "2/3/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyverse)
+library(Seurat)
+library(scran)
+library(patchwork)
+library(DESeq2)
+library(IHW)
+library(slingshot)
+library(vsn)
+library(pheatmap)
+library(SeuratWrappers)
+library(velocyto.R)
+```
+
+
+## B110 Theme
+
+```{r theme, include=FALSE}
+
+theme_b110 <- function(){
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 10,    family="Helvetica"), 
+    axis.title = element_text(size = 10,    family="Helvetica"),
+    plot.title = element_text(size = 12,hjust = 0.5,face = "bold",    family="Helvetica"),
+    legend.title = element_text(size = 12,    family="Helvetica"),
+    legend.text = element_text(size = 10,    family="Helvetica")#,
+    #legend.position = "bottom"
+    )
+}
+
+sumfun <- function(x){
+  sum(x != 0) * 100 / length(x)
+}
+
+
+data_summary <- function(x) {
+   m <- mean(x)
+   ymin <- m - sd(x)
+   ymax <- m + sd(x)
+   return(c(y = m,ymin = ymin, ymax = ymax))
+}
+
+## B110 Colors
+
+sgi_blue    = '#5087C8'
+sgi_yellow1 = '#F2EE35'
+sgi_yellow2 = '#FED98E'
+b110_grey   = '#808080'
+b110_grey_light   = '#909090'
+b110_transparent_black = scales::alpha('#000000',0.5)
+
+gblue = '#4285F4'
+ggreen = '#0F9D58'
+gred = '#DB4437'
+gyellow = '#F4B400'
+
+google_red = '#dd4b39'
+google_green = '#0F9D58'
+google_yellow = '#F4B400'
+google_blue = '#4285F4'
+
+```
+
+## Load the data
+
+```{r data_loading,eval=FALSE}
+
+data_dirs = c("CSN5RLUC_1" = "raw_data/TX16_1_3runs/outs/filtered_feature_bc_matrix/",
+              "CDK2RLUC_1" = "raw_data/TX16_2_3runs/outs/filtered_feature_bc_matrix/",
+              "RLUCRLUC_1" = "raw_data/TX16_3_3runs/outs/filtered_feature_bc_matrix/",
+              "CSN5CDK2_1" = "raw_data/TX16_4_3runs/outs/filtered_feature_bc_matrix/",
+              "CSN8RLUC_2" = "raw_data/TX16_5_3runs/outs/filtered_feature_bc_matrix/",
+              "CDK2RLUC_2" = "raw_data/TX16_6_3runs/outs/filtered_feature_bc_matrix/",
+              "RLUCRLUC_2" = "raw_data/TX16_7_3runs/outs/filtered_feature_bc_matrix/",
+              "CSN8CDK2_2" = "raw_data/TX16_8_3runs/outs/filtered_feature_bc_matrix/"
+              )
+
+# Load the each dataset
+data_object <- Read10X(data.dir = data_dirs)
+
+# Initialize the Seurat object with the raw (non-normalized data).
+data_object <-  CreateSeuratObject(
+                        counts = data_object, 
+                        project = "SGI", 
+                        min.cells = 30, # filter genes that are non-zero in at least 30 cells (approx. 0.001 %)
+                        min.features = 200, # filter cells such that they contain at least 200 detected genes
+                        names.field = c(1,2),
+                        names.delim = "_")
+
+```
+
+  ## QC
+
+```{r standard_cell_QC, echo=T,eval=FALSE}
+
+data_object[["percent.mt"]] <- PercentageFeatureSet(data_object, pattern = "^mt:")
+
+data_object@meta.data %<>% 
+  rownames_to_column() %>%
+  separate(orig.ident, c("sample","replicate"), remove = F) %>% 
+  dplyr::mutate(type = if_else(sample %in% c("CSN5RLUC","CSN8RLUC"),"CSN",
+                  if_else(sample %in% c("CSN5CDK2","CSN8CDK2"),"DOUBLE",
+                    if_else(sample == "RLUCRLUC","CTRL","CDK2")))) %>% 
+  column_to_rownames()
+
+save(data_object,file = "processed_data/raw_data_object.RData")
+
+plot1 <- 
+  FeatureScatter(data_object, feature1 = "nCount_RNA", feature2 = "percent.mt",group.by = "orig.ident",pt.size = 0.4) + 
+    scale_x_log10() + 
+    geom_vline(xintercept = 2500) + 
+    geom_hline(yintercept = 10) +
+    theme_b110()
+
+plot2 <- 
+  FeatureScatter(data_object, feature1 = "nCount_RNA", feature2 = "nFeature_RNA",group.by = "orig.ident",pt.size = 0.4) + 
+  geom_vline(xintercept = 2500 ) + 
+  geom_hline(yintercept = c(200,6000) )+
+    theme_b110()
+
+
+#data_object_filtered <- subset(data_object, subset = nFeature_RNA > 200 & nFeature_RNA < 6000 & percent.mt < 10 & nCount_RNA > 2500)
+
+```
+
+## subsetting the data
+
+```{r}
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "processed_data/data_object_filtered_together-PC1.rds")
+}
+
+plot3 <- 
+  FeatureScatter(data_object_filtered, feature1 = "nCount_RNA", feature2 = "percent.mt",group.by = "orig.ident",pt.size = 0.4) + 
+    scale_x_log10() + 
+    geom_vline(xintercept = 2500) + 
+    geom_hline(yintercept = 10) +
+    theme_b110()
+
+plot4 <- 
+  FeatureScatter(data_object_filtered, feature1 = "nCount_RNA", feature2 = "nFeature_RNA",group.by = "orig.ident",pt.size = 0.4) + 
+  geom_vline(xintercept = 2500 ) + 
+  geom_hline(yintercept = c(200,6000) )+
+    theme_b110()
+
+#plot1 + plot2 + 
+  
+p<- plot1 +plot2 + plot3 + plot4 +plot_layout(nrow = 2,ncol = 2)
+
+ggsave("plots_png/raw_data_QC.png",p,width = 20,height = 14,units = "cm")
+ggsave("plots_pdf/raw_data_QC.pdf",p,width = 20,height = 14,units = "cm")
+
+```
+
+## Normalization
+
+```{r}
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered <- NormalizeData(data_object_filtered, normalization.method = "LogNormalize", scale.factor = 10000)
+
+#alternative normalizeation using scran and scater as proposed in the best practice paper -> does not majorly impact outcome
+#raw_data <- GetAssayData(data_object_filtered,slot = "counts") %>% as.matrix()
+#size_factors <- scran::computeSumFactors(raw_data)
+#normed_data <- scater::normalizeCounts(raw_data,size_factors = size_factors)
+#normed_data_seurat <- Seurat::CreateAssayObject(normed_data)
+#data_object_filtered <- SetAssayData(data_object_filtered,slot = "data", normed_data_seurat@data)  
+```
+
+## Find highly-variable genes
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered <- FindVariableFeatures(data_object_filtered, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(data_object_filtered), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(data_object_filtered) + theme_b110()
+plot1 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+
+
+ggsave(filename = "plots_png/Varaible_Genes_plot.png",width = 6,height = 4,units = "cm")
+
+```
+
+## scaling the data
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+all.genes <- rownames(data_object_filtered)
+data_object_filtered <- ScaleData(data_object_filtered, features = all.genes)
+
+```
+
+## perform PCA as dimensionality reduction
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered <- RunPCA(data_object_filtered, features = VariableFeatures(object = data_object_filtered))
+#data_object_filtered <- RunPCA(data_object_filtered, features = all.genes)  ## could not be perfect as it seems to separate replicates where they should be integrated based on scran normalized data
+
+plot2 <- DimPlot(data_object_filtered, reduction = "pca",dims = c(1,2),group.by = "orig.ident",pt.size = 0.2)+theme_b110()
+
+ggsave("plots_png/PCA_QC.png",plot = plot2,width = 9,height = 6,units = "cm")
+ggsave("plots_pdf/PCA_QC.pdf",plot = plot2,width = 9,height = 6,units = "cm")
+
+png("plots_png/PC_heatmaps.png",width = 1400,height = 600)
+  DimHeatmap(data_object_filtered, dims = 1:6, cells = 500, balanced = TRUE)
+dev.off()
+
+plot3 <- ElbowPlot(data_object_filtered) + theme_b110()
+
+ggsave("plots_png/Elbow_plot.png",plot = plot3,width = 9,height = 6,units = "cm")
+ggsave("plots_pdf/Elbow_plot.pdf",plot = plot3,width = 9,height = 6,units = "cm")
+
+```
+
+## cluster cells
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered <- FindNeighbors(data_object_filtered, dims = 2:10)
+data_object_filtered <- FindClusters(data_object_filtered, resolution = 0.5)
+
+```
+
+## run umap on the first 10 PCs
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered <- RunUMAP(data_object_filtered, dims = 2:10)
+data_object_filtered <- RunTSNE(data_object_filtered, dims = 2:10)
+
+a <- DimPlot(data_object_filtered, reduction = "umap",group.by = "orig.ident") + theme_b110()
+
+b <- DimPlot(data_object_filtered, reduction = "umap",group.by = "replicate")+ theme_b110()
+
+c <- DimPlot(data_object_filtered, reduction = "umap",group.by = "seurat_clusters")+ theme_b110()
+
+c <- LabelClusters(plot = c, id = 'seurat_clusters')+ theme_b110()
+
+d <- DimPlot(data_object_filtered, reduction = "umap",group.by = "type") + theme_b110()
+
+f<- a + b + c + d
+
+ggsave("plots_png/clustering-PC1.png",f,width = 20,height = 16,units = "cm")
+
+
+a <- FeaturePlot(data_object_filtered, reduction = "umap", features = c("nCount_RNA","nFeature_RNA","percent.mt","Hsp26")) + theme_b110()
+
+ggsave("plots_png/QC_genes-PC1.png",a,width = 20,height = 16,units = "cm")
+ggsave("plots_pdf/QC_genes-PC1.pdf",a,width = 20,height = 16,units = "cm")
+
+```
+
+## plot some gene onto the umap exploratirily
+
+```{r} 
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+DefaultAssay(object = data_object_filtered) <- "RNA"
+
+FeaturePlot(data_object_filtered, reduction = "umap", features = c("geminin","aurB","sti","ncd"), slot = "data")
+
+ggsave("cycle_genes-PC1.png")
+
+FeaturePlot(data_object_filtered, reduction = "umap", features = c("sty","Thor","spz","Pvr"), slot = "scale.data")
+
+ggsave("Rastor_genes-PC1.png")
+
+FeaturePlot(data_object_filtered, reduction = "umap", features = c("Drs","AttD","CG15347","spz"), slot = "scale.data")
+
+ggsave("SASP_genes-PC1.png")
+
+FeaturePlot(data_object_filtered, reduction = "umap", features = c("CycE"), slot = "data")
+
+ggsave("CyCE_genes-PC1.png")
+
+
+f <- FeaturePlot(data_object_filtered, reduction = "umap", features = c("Drs"), slot = "data")
+
+d + f
+
+ggsave("Samples_Drs_Sergi_genes-PC1.svg")
+
+```
+
+## Group mirrored clusters into once already giving them some fucntional annotations
+
+```{r} 
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+data_object_filtered@meta.data %<>% 
+   rownames_to_column() %>%
+  dplyr::mutate(sub_type = if_else(seurat_clusters %in% c(7,5),"mitotic",
+                            if_else(seurat_clusters %in% c(3,8,6),"interaction",
+                                    if_else(seurat_clusters %in% c(0,1),"inner_intermed",
+                                            if_else(seurat_clusters %in% c(2),"outer_intermed","death-mt-rich"))))) %>%
+  column_to_rownames()
+
+set.seed(12345)
+
+sampled_cells <- metadata_as_data_frame %>%
+  group_by(type) %>%
+  sample_n(1600) %>%
+  pull(rowname)
+
+sub_sampled <-subset(data_object_filtered,cells=sampled_cells)
+
+a <- Seurat::DimPlot(sub_sampled, reduction = "umap",group.by = "type",cols = scales::alpha(c('red','darkgreen','brown','purple'),alpha = 0.5)) 
+
+#b <- Seurat::DimPlot(data_object_filtered, reduction = "umap",group.by = "sister_clusters") 
+
+#b <- LabelClusters(plot = b, id = 'sister_clusters')
+
+b <- Seurat::DimPlot(sub_sampled, reduction = "umap",group.by = "sub_type",cols = c("darkgreen",ggreen,gyellow,gred,gblue))
+
+b <- LabelClusters(plot = b, id = 'sub_type')
+
+c <- FeaturePlot(sub_sampled, reduction = "umap", features = c("Drs"), slot = "data")
+
+d <- FeaturePlot(sub_sampled, reduction = "umap", features = c("aurB"), slot = "data")
+
+
+a  + b + c +d
+
+ggsave("type_clusters-PC1.png")
+
+ggsave("type_clusters-PC1.pdf")
+
+#saveRDS(data_object_filtered, file = "./data_object_filtered_together-PC1.rds")
+
+
+```
+
+#Differential Cluster compositions
+
+```{r}
+
+if(!exists("data_object_filtered")){
+  data_object_filtered <- readRDS(file = "./data_object_filtered_together-PC1.rds")
+}
+
+metadata_as_data_frame <- 
+  data_object_filtered@meta.data %>% 
+  rownames_to_column() %>% 
+  as_tibble() %>%
+  dplyr::mutate(sub_type = factor(sub_type,levels = c("mitotic","inner_intermed","outer_intermed","interaction","death-mt-rich"),ordered = T)) %>%
+  dplyr::mutate(type = factor(type,levels = c("CTRL","CDK2","CSN","DOUBLE"),ordered = T))
+
+plot5 <- metadata_as_data_frame %>%
+  group_by(type,replicate) %>%
+  summarise(percent.mt=mean(percent.mt),nCount_RNA=sum(nCount_RNA),ncells=n()) %>%
+  mutate(feat_p_cell=nCount_RNA/ncells) %>%
+  gather(QC,value,-replicate,-type) %>%
+  ggplot(aes(x=type,y=value)) +
+    geom_bar(stat="Identity") +
+    facet_wrap(~QC+replicate,scales = "free_y",ncol=2,nrow = 4) +
+    theme_b110()+ 
+    theme(axis.text.x = element_text(angle = -45, hjust = 0.2,vjust = 0.1))
+
+ggsave("plots_png/Cell_feature_Count_QC.png",plot5,width = 10,height = 18,units = "cm")
+ggsave("plots_pdf/Cell_feature_Count_QC.pdf",plot5,width = 10,height = 18,units = "cm")
+
+```
+
+

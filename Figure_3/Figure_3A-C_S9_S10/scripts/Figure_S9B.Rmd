@@ -1,0 +1,464 @@
+---
+title: "Supplemental Figure S9B"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## SETUP
+
+```{r setup, include=FALSE}
+set.seed(123)
+library(tidyverse)
+library(ggpubr)
+library(PRROC)
+library(ggrastr)
+library(patchwork)
+library(ggrepel)
+library(MASS)
+library(e1071)
+library(caret)
+library(xgboost)
+library(randomForest)
+
+theme_b110<-function(){
+  theme_classic() +
+  theme(
+    axis.text=element_text(size = 10), 
+    axis.title=element_text(size = 10),
+    plot.title = element_text(size = 12,hjust = 0.5,face="bold"),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size =10),
+    legend.position = "bottom"
+    )
+}
+
+
+sgi_blue    = '#5087C8'
+sgi_yellow1 = '#F2EE35'
+sgi_yellow2 = '#FED98E'
+b110_grey   = '#808080'
+b110_grey_light   = '#909090'
+b110_transparent_black = alpha('#000000',0.5)
+google_red='#dd4b39'
+google_green='#0F9D58'
+google_yellow='#F4B400'
+google_blue='#4285F4'
+
+prettyConfused<-function(Actual,Predict,colors=c("white",google_red,google_blue),text.scl=0.3){
+  actual = as.data.frame(table(Actual))
+  names(actual) = c("Actual","ActualFreq")
+  
+  #build confusion matrix
+  confusion = as.data.frame(table(Actual, Predict))
+  names(confusion) = c("Actual","Predicted","Freq")
+  
+  #calculate percentage of test cases based on actual frequency
+  
+  confusion = merge(confusion, actual, by=c('Actual','Actual'))
+  confusion$Percent = confusion$Freq/confusion$ActualFreq*100
+  confusion$ColorScale<-confusion$Percent*-1
+  confusion[which(confusion$Actual==confusion$Predicted),]$ColorScale<-confusion[which(confusion$Actual==confusion$Predicted),]$ColorScale*-1
+  confusion$Label<-paste(round(confusion$Percent,0),"%, n=",confusion$Freq,sep="")
+  tile <- ggplot() +
+    geom_tile(aes(x=Actual, y=Predicted,fill=ColorScale),data=confusion, color=b110_grey_light,size=0.1) #+
+  tile = tile +
+    scale_fill_gradient2(low=colors[2],high=colors[3],mid=colors[1],midpoint = 0,na.value = '#d3d3d3')+
+    theme(axis.text.x = element_blank(),axis.text.y = element_blank())
+}
+```
+
+## Loading of look up tables
+
+At first we go and fetch all the different mapping tables we created and used troughout the analysis. These include the list of non-redundant, reproducible features, the FBgn-targetid-current_symbol conversion table that was reiterated using current flybase releases. A gold-standard annotation that has been hand curated using flybase and literature research. And a current gene group annotation from flybase 02_2019.
+
+```{r}
+
+usable_features<-readRDS("processed_data/usable_features_18112019.rds")
+
+conversion_table<-read_delim("annotations/SYNGENE_target_id_to_modern_symbol_sorted_uniq.txt",delim = "\t") %>% unite(current_symbol_id,current_symbol,targetid,remove = F)
+
+genes_to_genegroups<-read_delim("annotations/gene_group_data_fb_2019_02_mod.tsv",delim = "\t") %>% dplyr::select(gene_group=FB_group_name,current_symbol=Group_member_FB_gene_symbol,current_fbgn=Group_member_FB_gene_id)
+
+```
+
+## Loading of pre-processed data
+
+```{r}
+
+main_effects_df <- read_rds("processed_data/main_effect_df_181119.rds")
+interaction_vecs<-read_rds("processed_data/interactions_stats_all_feats_df_18112019.rds")
+interaction_vecs %<>% left_join(conversion_table) %>% filter(feature %in% usable_features)
+main_effects_df %<>% left_join(conversion_table) %>% filter(feature %in% usable_features)
+interaction_stats<-interaction_vecs %>% filter(feature=="cells") %>% dplyr::select(targetid,query_name,mpi) %>% spread(query_name,mpi)
+
+
+#annotate which gene groups are present in the assay and which genes these are (pre-requisite for finding the attributes that are covered best)
+genes_to_genegroups_in_assay <- genes_to_genegroups %>% filter(current_fbgn %in% unique(main_effects_df$converted_id))
+
+```
+
+## Load the enriched feature attributes
+
+We stream line the prediction of new functional genes by focusing training and testing on gene groups that have shown significant functional enrichment in either the genetic interaction correlation networks or the morphology based correlation networks. This way, we aim to capture and learn functional classes that are covered by either morphological profiles or genetic interaction profiles. The enrichment files have been created using SAFE on a spring-embedded force-directed correlation network in Cytoscape. Annotation basis was the gene group file loaded above. For each enrichment domain, we then select the enriched attribute that is covered by most genes in our screened data set. This way, we optimize the size of our training and testing data and exclude groups that ar not covered by at least 4 genes.
+
+```{r}
+enriched_attributes_interaction<-
+  bind_rows(
+    read_delim("processed_data/interaction_network_connectivity-attribute_properties_annotation-highest.txt",delim = "\t") %>% 
+      dplyr::select(gene_group=`Attribute name`,domain=`Domain Id`), 
+    read_delim("processed_data/interaction_network_confidence-attribute_properties_annotation-highest.txt",delim = "\t") %>% 
+      dplyr::select(gene_group=`Attribute name`,domain=`Domain Id`),
+    .id = "net_size") %>% 
+  distinct()
+
+enriched_attributes_feature<-
+  bind_rows(
+    read_delim("processed_data/feature_network_connectivity-attribute_properties_annotation-highest.txt",delim = "\t") %>% 
+      dplyr::select(gene_group=`Attribute name`,domain=`Domain Id`), 
+    read_delim("processed_data/feature_network_confidence-attribute_properties_annotation-highest.txt",delim = "\t") %>% 
+      dplyr::select(gene_group=`Attribute name`,domain=`Domain Id`),
+    .id = "net_size") %>% 
+  distinct()
+
+interaction_clustered_attributes<-enriched_attributes_interaction %>% 
+  left_join(genes_to_genegroups_in_assay) %>% 
+  group_by(gene_group,domain,net_size) %>% 
+  summarise(n=n()) %>%
+  group_by(domain,net_size) %>%
+  arrange(net_size,domain,desc(n)) %>% 
+  do(head(.,n = 1)) %>% 
+  pull(gene_group) %>% 
+  unique()
+
+feature_clustered_attributes<-enriched_attributes_feature %>% 
+  left_join(genes_to_genegroups_in_assay) %>% 
+  group_by(gene_group,domain,net_size) %>% 
+  summarise(n=n()) %>%
+  group_by(domain,net_size) %>%
+  arrange(net_size,domain,desc(n)) %>% 
+  do(head(.,n = 1)) %>% 
+  pull(gene_group) %>% 
+  unique()
+
+clustered_attributes<-unique(c(interaction_clustered_attributes,feature_clustered_attributes))
+
+selected_gene_groups<-genes_to_genegroups %>% filter(gene_group %in% clustered_attributes) %>% distinct()
+
+selected_gene_groups  %<>% dplyr::select(-current_fbgn) %>% distinct() %>% group_by(current_symbol) %>% do(head(.,1))
+
+```
+
+## load and consider the specific correlation networks
+
+```{r}
+
+interaction_correlation_edges_normed<-read_delim("processed_data/correlation_table_pan_0.3_first3_filtered_genes_v3.txt",delim = "\t")
+
+interaction_correlation_edges_normed %<>% 
+  rename(targetid=idx) %>% 
+  left_join(conversion_table) %>% 
+  rename(idx = targetid,current_symbol_x = current_symbol,targetid=idy) %>% 
+  dplyr::select(-current_symbol_id, -converted_id) %>% 
+  left_join(conversion_table ) %>% 
+  rename(idy = targetid,current_symbol_y= current_symbol) %>% 
+  dplyr::select(-current_symbol_id, -converted_id) %>% 
+  dplyr::select(current_symbol_x,current_symbol_y,idx,idy,r)
+
+interaction_correlation_edges_simple<-read_delim("processed_data/correlation_table_simple_0.45_filtered_genes_v4.txt",delim = "\t")
+
+interaction_correlation_edges_simple %<>% 
+  rename(targetid=idx) %>% 
+  left_join(conversion_table) %>% 
+  rename(idx = targetid,current_symbol_x = current_symbol,targetid=idy) %>% 
+  dplyr::select(-current_symbol_id, -converted_id) %>% 
+  left_join(conversion_table ) %>% 
+  rename(idy = targetid,current_symbol_y= current_symbol) %>% 
+  dplyr::select(-current_symbol_id, -converted_id) %>% 
+  dplyr::select(current_symbol_x,current_symbol_y,idx,idy,r)
+
+```
+
+## raw data
+
+# Target annotations
+
+First we collect feature and interaction (cell number) based profile data for each targetid in the screen.
+
+```{r}
+# we replace all NA values by 0 (1344 values out of 793 440 numeric values (0,16 %))
+
+interaction_stats[is.na(interaction_stats)]<-0
+
+feature_table<-
+  main_effects_df %>% 
+  mutate(value=if_else(is.na(value),0,value)) %>%
+  spread(feature,value) %>% 
+  left_join(interaction_stats) 
+
+interaction_table<-
+  interaction_vecs %>% 
+  dplyr::select(feature,mpi,query_name,targetid) %>%
+  unite(feature_query,feature,query_name) %>%
+  spread(feature_query,mpi,fill=0)
+
+# we create a translator file to convert gene ids to factors
+
+translator_current<-feature_table %>%
+  mutate(targetid_fac=factor(targetid) %>% as.numeric() ) %>% 
+  dplyr::select(current_symbol,targetid_fac,current_symbol_id,targetid,gene_symbol,converted_id) %>%
+  distinct() %>%
+  write_delim("processed_data/translator_281119.txt",delim = "\t")
+
+```
+
+## Data wrangling
+
+```{r}
+
+# first we join the current feature table with the selected gene group labels
+# then we replace all non ASCII characters by "_" in the labels
+
+SYNGENE.content.labeled<-feature_table %>%
+  left_join(translator_current) %>%
+  left_join(selected_gene_groups) %>%
+  dplyr::select(-current_symbol, -current_symbol_id, -targetid, -gene_symbol, -converted_id,label=gene_group) %>%
+  mutate(label=gsub("\\s+","_",label),label=gsub("\\W+","_",label)) %>%
+  mutate(label=if_else(label=="CALCIUM_CALMODULIN_DEPENDENT_PROTEIN_KINASES",NA_character_,label))%>% 
+  mutate(label=if_else(label=="NEUROPEPTIDES",NA_character_,label))%>% 
+  mutate(label=if_else(label=="M6A_METHYLTRANSFERASE_COMPLEX",NA_character_,label))%>% 
+  mutate(label=if_else(label=="ENOK_COMPLEX",NA_character_,label))%>% 
+  mutate(label=if_else(label=="TALE_HOMEOBOX_TRANSCRIPTION_FACTORS",NA_character_,label))%>% 
+  mutate(label=if_else(label=="RHO_GTPASES",NA_character_,label)) %>% 
+  mutate(label=if_else(label=="Negative_Regulators_of_Sevenless_Signaling_Pathway"|label=="Negative_Regulators_of_Torso_Signaling_Pathway","Negative_Regulators_of_Insulin_like_Receptor_Signaling_Pathway",label))%>% 
+   mutate(label=if_else(label=="U4_U6_U5_SMALL_NUCLEAR_RIBONUCLEOPROTEIN_PARTICLE","SPLICEOSOME_COMPLEX_B",label))%>% 
+  mutate(label=if_else(label=="BRAHMA_ASSOCIATED_PROTEINS_COMPLEX","POLYBROMO_CONTAINING_BRAHMA_ASSOCIATED_PROTEINS_COMPLEX",label)) %>% 
+  dplyr::select(targetid_fac,everything())
+
+# collect the same data for features and queries combined
+
+
+SYNGENE.content.labeled.interaction <- interaction_table %>%
+  left_join(translator_current) %>%
+  left_join(selected_gene_groups) %>%
+  dplyr::select(-current_symbol, -current_symbol_id, -targetid, -gene_symbol, -converted_id,label=gene_group) %>%
+  mutate(label=gsub("\\s+","_",label),label=gsub("\\W+","_",label)) %>%
+  mutate(label=if_else(label=="CALCIUM_CALMODULIN_DEPENDENT_PROTEIN_KINASES",NA_character_,label))%>% 
+  mutate(label=if_else(label=="NEUROPEPTIDES",NA_character_,label))%>% 
+  mutate(label=if_else(label=="M6A_METHYLTRANSFERASE_COMPLEX",NA_character_,label))%>% 
+  mutate(label=if_else(label=="ENOK_COMPLEX",NA_character_,label))%>% 
+  mutate(label=if_else(label=="TALE_HOMEOBOX_TRANSCRIPTION_FACTORS",NA_character_,label))%>% 
+  mutate(label=if_else(label=="RHO_GTPASES",NA_character_,label)) %>% 
+  mutate(label=if_else(label=="Negative_Regulators_of_Sevenless_Signaling_Pathway"|label=="Negative_Regulators_of_Torso_Signaling_Pathway","Negative_Regulators_of_Insulin_like_Receptor_Signaling_Pathway",label))%>% 
+  mutate(label=if_else(label=="U4_U6_U5_SMALL_NUCLEAR_RIBONUCLEOPROTEIN_PARTICLE","SPLICEOSOME_COMPLEX_B",label))%>% 
+  mutate(label=if_else(label=="BRAHMA_ASSOCIATED_PROTEINS_COMPLEX","POLYBROMO_CONTAINING_BRAHMA_ASSOCIATED_PROTEINS_COMPLEX",label)) %>% 
+  dplyr::select(targetid_fac,everything())
+
+# next we replace all non-ASCII characters in the column_headers of the final feature table
+
+names(SYNGENE.content.labeled.interaction)<-gsub("\\W+|\\s+","_",names(SYNGENE.content.labeled.interaction))
+names(SYNGENE.content.labeled)<-gsub("\\W+|\\s+","_",names(SYNGENE.content.labeled))
+
+# devide sample into split and training data
+
+spec = c(train = .7, validate = .3)
+
+f<-function(df){
+  g = sample(cut(
+  seq(nrow(df)), 
+  nrow(df)*cumsum(c(0,spec)),
+  labels = names(spec)
+  ))
+  df %>% mutate(split=g)
+}
+
+#chose only 4 genes per pathway for training name all genes that exceed the 4 genes per pathway threshold to the testing set
+
+f2<-function(x){
+  if(sum(x$split=="train")>4){
+    x %>% mutate(split=factor(c(rep("train",4),rep("validate",(nrow(x)-4))) %>% sample())) %>% return()
+  }else{
+    return(x)
+  }
+}
+
+# we first split all processes into train (70 %) and validation data (30 %)
+
+# then we filter each label and train and validation set to contain at least two samples
+
+# then we keep all labels where both train and test are at least two samples
+good_processes<-
+  SYNGENE.content.labeled %>% 
+  group_by(label) %>% 
+  do(f(.)) %>% 
+  filter(!is.na(label)) %>%
+  arrange(split,desc(label)) %>% 
+  group_by(split,label) %>% 
+  count() %>% 
+  filter(n>=2) %>% 
+  group_by(label) %>% 
+  count() %>% 
+  filter(n>1) %>% 
+  pull(label)
+
+#print out the count of available samples per gene group
+
+SYNGENE.content.labeled %>% mutate(is_good=if_else(label %in% good_processes,1,0)) %>%  group_by(label,is_good) %>% count() 
+
+# now we collect the samples for each of these labels
+
+nonnacontent<-
+  SYNGENE.content.labeled %>% 
+  mutate(label=if_else(label %in% good_processes,label,NA_character_)) %>% 
+  group_by(label) %>% 
+  do(f(.)) %>% 
+  filter(!is.na(label)) %>% 
+  group_by(label) %>% 
+  do(f2(.)) %>% 
+  ungroup %>% 
+  arrange(split,desc(label))
+
+# then we randomise the unlabeled data to avoid any biases
+
+nacontent<-
+  SYNGENE.content.labeled %>% 
+  mutate(label=if_else(label %in% good_processes,label,NA_character_)) %>% 
+  filter(is.na(label)) %>% 
+  sample_frac() %>% 
+  group_by(label) %>% 
+  do(f(.)) %>%
+  ungroup()
+
+newcontent<-bind_rows(nonnacontent,nacontent) %>% dplyr::select(-split)
+save_content<-bind_rows(nonnacontent,nacontent)
+
+save_content_featque<-save_content %>% dplyr::select(targetid_fac,split) %>% left_join(SYNGENE.content.labeled.interaction) %>% dplyr::select(targetid_fac,matches("_"),label,split)
+
+#write out the different tables 
+
+save(save_content,file = "processed_data/save_content_current.RData")
+save(save_content_featque,file = "processed_data/save_content_featque_current.RData")
+save(pred_dat,file = "processed_data/pred_dat_current.RData")
+
+#print where in the file the training and testing data starts and ends
+
+save_content %>% ungroup %>% mutate(idx=1:n()) %>% filter(!is.na(label)) %>% group_by(split) %>% summarise(r=list(range(idx))) %>% unnest(r)
+
+
+```
+
+
+## lets take this data and go for a random Forrest benchmark
+
+```{r}
+load(file = "processed_data/save_content_current.RData")
+load(file = "processed_data/save_content_featque_current.RData")
+load(file = "processed_data/pred_dat_current.RData")
+
+
+cur_dat<-
+  save_content %>% 
+  dplyr::select(-targetid_fac) %>% 
+  filter(!is.na(label)) %>%
+  split.data.frame(.$split)
+
+int_dat <- 
+  save_content %>% 
+  dplyr::select(-ends_with("tmean"),-ends_with("sd"),-cells,label,targetid_fac,split,nesd) %>% 
+  dplyr::select(-targetid_fac) %>% 
+  filter(!is.na(label)) %>% 
+  split.data.frame(.$split)
+
+feat_dat<-
+  save_content %>% 
+  dplyr::select(ends_with("tmean"),ends_with("sd"),cells,label,targetid_fac,split,-nesd) %>% 
+  dplyr::select(-targetid_fac) %>% filter(!is.na(label)) %>% 
+  split.data.frame(.$split)
+
+featque_dat<-save_content_featque %>% dplyr::select(-targetid_fac) %>% filter(!is.na(label)) %>% split.data.frame(.$split)
+
+rf_full<-randomForest(factor(label)~.,data=cur_dat$train[,-ncol(cur_dat$train)])
+rf_int<-randomForest(factor(label)~.,data=int_dat$train[,-ncol(int_dat$train)])
+rf_feat<-randomForest(factor(label)~.,data=feat_dat$train[,-ncol(feat_dat$train)])
+rf_featque<-randomForest(factor(label)~.,data=featque_dat$train[,-ncol(featque_dat$train)])
+
+test_results_full<-tibble("Prediction"=predict(rf_full,newdata = cur_dat$validate),"Reference"=factor(cur_dat$validate$label))
+test_results_int<-tibble("Prediction"=predict(rf_int,newdata = cur_dat$validate),"Reference"=factor(cur_dat$validate$label))
+test_results_feat<-tibble("Prediction"=predict(rf_feat,newdata = cur_dat$validate),"Reference"=factor(cur_dat$validate$label))
+test_results_featque<-tibble("Prediction"=predict(rf_featque,newdata = featque_dat$validate),"Reference"=factor(featque_dat$validate$label))
+
+conf_full<-confusionMatrix(test_results_full$Prediction,factor(test_results_full$Reference,levels = levels(test_results_full$Prediction))) 
+conf_int<-confusionMatrix(test_results_int$Prediction,factor(test_results_int$Reference,levels = levels(test_results_int$Prediction))) 
+conf_feat<-confusionMatrix(test_results_feat$Prediction,factor(test_results_feat$Reference,levels = levels(test_results_feat$Prediction))) 
+conf_featque<-confusionMatrix(test_results_featque$Prediction,factor(test_results_featque$Reference,levels = levels(test_results_featque$Prediction))) 
+
+x<-bind_rows("fulL"=conf_full$overall,"int"=conf_int$overall,"feat"=conf_feat$overall,"featque"=conf_featque$overall,.id = "data_source")
+
+#save(rf_full,file = "processed_data/random_forrest_model_current_full_combinedprofiles_train_test.RData")
+
+write_delim(x,"results_files/classifier_performance_comparison.txt",delim = "\t")
+
+```
+
+## Evaluate the trained model
+
+```{r}
+
+test_results_full<-tibble("Prediction"=predict(rf_full,newdata = cur_dat$validate),"Reference"=factor(cur_dat$validate$label))
+
+p<-prettyConfused(test_results_full$Prediction,test_results_full$Reference,text.scl = 0.7,colors = c("white",b110_grey,google_red))
+
+print(p)
+
+ggsave(plot = p,filename = "graphics/full_data_forrest_current.pdf")
+
+```
+
+
+```{r}
+
+expression<-read_delim("../orthogonal_data/log_expression.txt",delim = " ")
+
+knowledge<-read_delim("../orthogonal_data/gene_information.txt",delim="\t") %>% 
+  left_join(read_delim("../orthogonal_data/GOevidence_weights.txt",delim="\t")) %>% 
+  group_by(fbgn) %>% 
+  summarise(knowness=sum(weight,na.rm = T))
+
+prediction_table<-predict(rf_full,newdata = pred_dat,type = "prob")%>% as.data.frame() %>% as_tibble() %>% mutate(targetid_fac=pred_dat$targetid_fac) %>% left_join(translator_current)
+
+prediction_table$vote<-NA
+prediction_table$score<-NA
+
+for(i in 1:nrow(prediction_table)){
+  prediction_table$vote[i]<-names(prediction_table)[1:47][which.max(prediction_table[i,1:47])]
+  prediction_table$score[i]<-c(prediction_table[i,1:47])[which.max(prediction_table[i,1:47])]
+}
+
+save(prediction_table,file = "results/prediction_table_current.RData")
+
+predictions<-prediction_table %>% unnest(score) %>%
+  gather(process,prob,-targetid_fac,-current_symbol,-current_symbol_id,-targetid,-gene_symbol,-converted_id,-vote,-score) %>% 
+  group_by(process) %>% arrange(desc(prob)) %>% filter(prob>=score) %>% left_join(save_content %>% left_join(translator_current) %>% select_if(is.character)) %>% 
+  rename(fbgn=converted_id) %>% left_join(expression) %>% left_join(knowledge) %>% 
+  mutate(link=paste0('http://flybase.org/reports/',fbgn)) 
+
+prediction_table %>% unnest(score) %>%
+  gather(process,prob,-targetid_fac,-current_symbol,-current_symbol_id,-targetid,-gene_symbol,-converted_id,-vote,-score) %>% 
+  group_by(process) %>% arrange(desc(prob)) %>% do(head(.,20)) %>% filter(prob>=score) %>% left_join(save_content %>% left_join(translator_current) %>% select_if(is.character)) %>% 
+  rename(fbgn=converted_id) %>% left_join(expression) %>% left_join(knowledge) %>% 
+  mutate(link=paste0('http://flybase.org/reports/',fbgn)) %>% 
+  write_delim("first_hitlist_20_highest_pred_v2.txt",delim = "\t")
+
+
+prediction_table %>% unnest(score) %>%
+  gather(process,prob,-targetid_fac,-current_symbol,-current_symbol_id,-targetid,-gene_symbol,-converted_id,-vote,-score) %>% 
+  group_by(process) %>% arrange(desc(prob)) %>% do(head(.,20)) %>% filter(prob>=score) %>% left_join(save_content %>% left_join(translator_current) %>% select_if(is.character)) %>% filter(is.na(label)) %>% rename(fbgn=converted_id) %>% left_join(expression) %>% left_join(knowledge) %>% 
+  mutate(link=paste0('http://flybase.org/reports/',fbgn)) %>% 
+  write_delim("first_hitlist_20_highest_pred_filtered_v2.txt",delim = "\t")
+
+prediction_table %>% unnest(score) %>%
+  gather(process,prob,-targetid_fac,-current_symbol,-current_symbol_id,-targetid,-gene_symbol,-converted_id,-vote,-score) %>% 
+  group_by(process) %>% arrange(desc(prob)) %>% do(head(.,20)) %>% filter(prob>=score) %>% left_join(save_content %>% left_join(translator_current) %>% select_if(is.character)) %>% filter(is.na(label)) %>% rename(fbgn=converted_id) %>% left_join(expression) %>% left_join(knowledge) %>% 
+  mutate(link=paste0('http://flybase.org/reports/',fbgn)) %>% pull(process) %>% unique() %>% length()
+```
+
