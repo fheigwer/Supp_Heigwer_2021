@@ -1,0 +1,198 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+q---
+title: "Figure_1_QC"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## SETUP
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggpubr)
+library(patchwork)
+library(ggridges)
+library(corrr)
+library(RColorBrewer)
+library(ggrastr)
+```
+
+## B110 Theme
+
+```{r theme, include=FALSE}
+
+theme_b110<-function(){
+  theme_classic() +
+  theme(
+    axis.text=element_text(size = 10,family = "Helvetica"), 
+    axis.title=element_text(size = 10,family = "Helvetica"),
+    plot.title = element_text(size = 12,hjust = 0.5,face="bold",family = "Helvetica"),
+    legend.title = element_text(size = 12,family = "Helvetica"),
+    legend.text = element_text(size =10,family = "Helvetica"),
+    legend.position = "bottom"
+    )
+}
+
+sgi_blue    = '#5087C8'
+sgi_yellow1 = '#F2EE35'
+sgi_yellow2 = '#FED98E'
+b110_grey   = '#808080'
+b110_grey_light   = '#909090'
+b110_transparent_black = alpha('#000000',0.5)
+google_red='#dd4b39'
+google_green='#0F9D58'
+google_yellow='#F4B400'
+google_blue='#4285F4'
+
+```
+
+# Data read in
+
+```{r}
+
+interaction_vecs<-read_rds("processed_data/interactions_stats_all_feats_df_18112019.rds")
+
+load("processed_data/normalized_data_cells.RData")
+
+filtered_data_cor_many_feats<-readRDS("processed_data/cor_many_feats_18112019.rds")
+
+```
+
+## Supplementary Figure 16 A
+
+Normed feature correlation between replicate screens (different query RNAi reagents)
+
+```{r}
+
+p1 <- filtered_data_cor_many_feats %>%
+    group_by(feature) %>%
+    filter(median(c)>0.5) %>%
+    ggplot(aes(x=c,y=reorder(feature,-c,median,na.rm=T))) +
+      geom_density_ridges(lwd=0.1,col=b110_grey) +
+      geom_vline(xintercept = 0.5,col=google_red) +
+      xlim(0,1) +
+      theme_b110() +
+      theme(axis.text.y=element_blank(),axis.ticks.y=element_blank()) +
+      ylab("features")
+
+ggsave(p1,filename = "all_feature_normed_value_replicate_correlations.pdf",width = 6,height = 30,units = "cm")
+
+
+
+```
+
+
+## Supplementary Figure 16 B
+
+Correlation of interaction profiles across different queries and RNAi designs
+
+```{r}
+
+f1<-function(x){
+  cor((x[,"2"]+x[,"3"])/2,(x[,"1"]+x[,"4"])/2,method = "p",use="p")
+}
+
+f2<-function(x){
+  cor((x[,"1"]+x[,"2"])/2,(x[,"3"]+x[,"4"])/2,method = "p",use="p")
+}
+
+f3<-function(x){
+  cor((x[,"1"]+x[,"3"])/2,(x[,"2"]+x[,"4"])/2,method = "p",use="p")
+}
+
+f4<-function(x){
+  cor((x[,"1"]),(x[,"2"]),method = "p",use="p")
+}
+
+f5<-function(x){
+  cor((x[,"3"]),(x[,"4"]),method = "p",use="p")
+}
+
+f6<-function(x){
+  cor((x[,"1"]),(x[,"3"]),method = "p",use="p")
+}
+
+f7<-function(x){
+  cor((x[,"2"]),(x[,"4"]),method = "p",use="p")
+}
+
+statistically_tested_pi_cor<-interaction_vecs %>% 
+                                filter(feature=="cells") %>%
+                                group_by(feature,query_name) %>% 
+                                do(t2q1.m.t1q2_v_t1q1.m.t2q2=f1(.),t1q1.m.t2q1_v_t1q2t2q2=f2(.),t1q1.m.t1q2_v_t2q1.m.t2q2=f3(.),t1q1_v_t2q1=f4(.),t1q2_v_t2q2=f5(.),t1q1_v_t1q2=f6(.),t2q1_v_t2q2=f7(.)) %>% 
+                                unnest(c(t1q1_v_t1q2, t2q1_v_t2q2, t1q1_v_t2q1, t1q2_v_t2q2, t1q1.m.t1q2_v_t2q1.m.t2q2,t1q1.m.t2q1_v_t1q2t2q2, t2q1.m.t1q2_v_t1q1.m.t2q2)) %>% 
+                                gather(type,value,-query_name,-feature) %>%
+                                mutate(
+                                  type=
+                                    factor(type,
+                                              levels=c("t1q1_v_t1q2", "t2q1_v_t2q2", "t1q1_v_t2q1", "t1q2_v_t2q2", "t1q1.m.t1q2_v_t2q1.m.t2q2","t1q1.m.t2q1_v_t1q2t2q2", "t2q1.m.t1q2_v_t1q1.m.t2q2")))
+
+medians <- statistically_tested_pi_cor %>% 
+  group_by(type) %>%
+  summarise(value=median(value)) 
+
+p2 <- statistically_tested_pi_cor %>%
+  ggplot(aes(value)) +
+    geom_density() +
+    xlim(-0.5,1) +
+    geom_vline(xintercept = 0,lty=2) +
+    geom_vline(data = medians, aes(xintercept = value),lty=1) +
+    facet_wrap(~type) +
+    theme_b110()
+    
+
+ggsave(p2,filename = "cell_number_interaction_profiles_correlations.pdf",width = 16,height = 10,units = "cm")
+
+
+```
+
+## Supplementary Figure 16 C
+
+Correlation of Interaction permutations
+
+```{r}
+
+data_subset<-
+  interaction_vecs %>% 
+  filter(feature=="cells") %>%
+  filter(gene_symbol %in% unique(.$query_name)) %>% 
+  filter(query_name %in% unique(.$gene_symbol)) %>% 
+  mutate(mpi=`1`+`2`+`3`+`4`) %>%
+  dplyr::select(query_name,gene_symbol,mpi) %>% 
+  arrange(query_name,gene_symbol) %>% 
+  group_by(query_name,gene_symbol) %>% 
+  summarise(mpi=mean(mpi,na.rm=T)) %>%
+  ungroup()
+
+combinations<-
+  combn(unique(data_subset$gene_symbol),2) %>% 
+  t() %>% 
+  as_tibble() %>%
+  rename(query_name=V1,gene_symbol=V2) %>% 
+  left_join(data_subset) %>% 
+  dplyr::rename(gene_symbol="query_name",query_name="gene_symbol",QxT=mpi) %>% 
+  left_join(data_subset) %>% 
+  dplyr::rename(TxQ ="mpi")
+
+p3<-combinations %>% 
+  ggplot(aes(x=QxT,y=TxQ)) +
+    geom_abline(slope = 1,lty=2,lwd=0.5) +
+     geom_vline(xintercept = 0,lty=2) +
+     geom_hline(yintercept = 0,lty=2) +
+     geom_point_rast(col=b110_grey, size = 0.5) + 
+     stat_cor(method = "pearson") +
+     ylab(paste0("QxT [π]")) +
+     xlab(paste0("TxQ [π]")) +
+     ggtitle(paste0("interaction permutation")) +
+     theme_b110()
+
+ggsave(p3,filename = "cell_number_interaction_permutation_correlation.pdf",width = 10,height = 10,units = "cm")
+
+```
+
+
