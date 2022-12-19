@@ -1,5 +1,7 @@
 # Heigwer et al., TBA 2022
 
+[![DOI](https://zenodo.org/badge/580053769.svg)](https://zenodo.org/badge/latestdoi/580053769)
+
 _The paper this repository relates to is currently under preparation._
 
 This directory contains scripts and files supporting the publication: </br>
