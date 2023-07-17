@@ -18,4 +18,4 @@ Should you encounter any issues or have any questions please contact Florian Hei
 
 Raw sequencing read data are deposit at ENA under the Study ID: PRJEB48815
 
-Raw & processeed scRNA-seq matrices as well as Raw & processed well-average interaction feature matrices are availanble at : [FigShare](http://10.6084/m9.figshare.14192783)
+Raw & processeed scRNA-seq matrices as well as Raw & processed well-average interaction feature matrices are availanble at : 10.6084/m9.figshare.14192783
