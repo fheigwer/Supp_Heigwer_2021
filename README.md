@@ -4,7 +4,7 @@
 
 This directory contains scripts and files supporting the publication: </br>
 
-[Heigwer _et al._]([http://LINK_TBA](https://www.cell.com/cell-systems/pdfExtended/S2405-4712(23)00079-0)), 2023, **A global genetic interaction network by single-cell imaging and machine learning**, _Cell Systems_
+[Heigwer _et al._](https://www.cell.com/cell-systems/pdfExtended/S2405-4712(23)00079-0), 2023, **A global genetic interaction network by single-cell imaging and machine learning**, _Cell Systems_
 
 ## Abstract
 
@@ -18,4 +18,4 @@ Should you encounter any issues or have any questions please contact Florian Hei
 
 Raw sequencing read data are deposit at ENA under the Study ID: PRJEB48815
 
-Raw & processeed scRNA-seq matrices as well as Raw & processed well-average interaction feature matrices are availanble at : [FigShare]([http://10.6084/m9.figshare.14192783])
+Raw & processeed scRNA-seq matrices as well as Raw & processed well-average interaction feature matrices are availanble at : [FigShare](http://10.6084/m9.figshare.14192783)
